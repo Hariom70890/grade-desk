@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <linearGradient id="sheetGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f1f5f9" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded rect -->
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)" />
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#334155" stroke-width="4" stroke-opacity="0.5" />
+
+  <!-- Graduation Cap (Mortarboard) -->
+  <g transform="translate(256, 155)">
+    <!-- Tassel -->
+    <path d="M75 -5 C90 15, 105 35, 100 65 C98 75, 90 85, 85 90" fill="none" stroke="#f59e0b" stroke-width="5" stroke-linecap="round" />
+    <circle cx="83" cy="95" r="7" fill="#fbbf24" />
+    
+    <!-- Diamond Top -->
+    <polygon points="0,-50 145,0 0,50 -145,0" fill="url(#goldGrad)" stroke="#b45309" stroke-width="3" />
+    <!-- Center button on mortarboard -->
+    <ellipse cx="0" cy="0" rx="10" ry="6" fill="#78350f" />
+
+    <!-- Cap lower skullcap -->
+    <path d="M-70 12 C-70 48, 70 48, 70 12 Z" fill="#b45309" opacity="0.9" />
+  </g>
+
+  <!-- Marksheet / Tabulation Desk Card -->
+  <g transform="translate(106, 240)">
+    <!-- Card shadow and base -->
+    <rect x="0" y="0" width="300" height="200" rx="16" fill="url(#sheetGrad)" stroke="#cbd5e1" stroke-width="3" filter="drop-shadow(0 10px 15px rgba(0,0,0,0.3))" />
+    
+    <!-- Header row of the sheet (School Exam Header in Blue) -->
+    <rect x="0" y="0" width="300" height="44" rx="16" fill="#2563eb" />
+    <rect x="0" y="28" width="300" height="16" fill="#2563eb" />
+    <!-- Yellow badge on header -->
+    <rect x="20" y="12" width="120" height="18" rx="4" fill="#fbbf24" />
+    <rect x="155" y="14" width="60" height="14" rx="3" fill="#93c5fd" />
+    <rect x="225" y="14" width="55" height="14" rx="3" fill="#60a5fa" />
+
+    <!-- Table Grid -->
+    <!-- Column 1: Pinned Roll Number (Amber Highlight) -->
+    <rect x="16" y="56" width="64" height="34" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5" />
+    <circle cx="34" cy="73" r="6" fill="#d97706" />
+    <rect x="46" y="70" width="26" height="6" rx="2" fill="#b45309" />
+
+    <rect x="16" y="98" width="64" height="34" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5" />
+    <circle cx="34" cy="115" r="6" fill="#d97706" />
+    <rect x="46" y="112" width="26" height="6" rx="2" fill="#b45309" />
+
+    <rect x="16" y="140" width="64" height="34" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5" />
+    <circle cx="34" cy="157" r="6" fill="#d97706" />
+    <rect x="46" y="154" width="26" height="6" rx="2" fill="#b45309" />
+
+    <!-- Columns: Marks -->
+    <g fill="#94a3b8">
+      <!-- Row 1 -->
+      <rect x="94" y="66" width="40" height="14" rx="3" fill="#38bdf8" />
+      <rect x="146" y="66" width="40" height="14" rx="3" fill="#38bdf8" />
+      <rect x="198" y="66" width="38" height="14" rx="3" fill="#34d399" />
+      <rect x="246" y="64" width="38" height="18" rx="4" fill="#10b981" />
+
+      <!-- Row 2 -->
+      <rect x="94" y="108" width="40" height="14" rx="3" fill="#38bdf8" />
+      <rect x="146" y="108" width="40" height="14" rx="3" fill="#38bdf8" />
+      <rect x="198" y="108" width="38" height="14" rx="3" fill="#34d399" />
+      <rect x="246" y="106" width="38" height="18" rx="4" fill="#10b981" />
+
+      <!-- Row 3 -->
+      <rect x="94" y="150" width="40" height="14" rx="3" fill="#38bdf8" />
+      <rect x="146" y="150" width="40" height="14" rx="3" fill="#38bdf8" />
+      <rect x="198" y="150" width="38" height="14" rx="3" fill="#34d399" />
+      <rect x="246" y="148" width="38" height="18" rx="4" fill="#10b981" />
+    </g>
+  </g>
+</svg>

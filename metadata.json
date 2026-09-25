@@ -1,0 +1,6 @@
+{
+  "name": "EduGrade Pro - School Exam & Performance Report System",
+  "description": "Automated marksheet data entry, quarterly and half-yearly performance analysis, ranking, and printable report card generator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
