@@ -8,7 +8,7 @@ import { MongoClient, ServerApiVersion } from 'mongodb';
 
 // Load environment variables from .env
 dotenv.config();
-dns.setServers( ['8.8.8.8', '1.1.1.1', '0.0.0.0'] );
+dns.setServers( ['8.8.8.8', '1.1.1.1'] );
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,9 +28,9 @@ async function getMongoClient(uri?: string): Promise<{ client: MongoClient; dbNa
   if (!targetUri) {
     throw new Error('MONGODB_URI is not set in environment or provided in request');
   }
-
+// console.log("mogno uri -", targetUri)    I am getting it correct
   // Parse DB name from URI or use default
-  let dbName = 'gradedesk';
+  let dbName = 'grade-desk';
   try {
     const urlObj = new URL(targetUri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://'));
     const pathname = urlObj.pathname.replace(/^\//, '');
