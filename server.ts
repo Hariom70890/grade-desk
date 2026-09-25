@@ -8,7 +8,7 @@ import { MongoClient, ServerApiVersion } from 'mongodb';
 
 // Load environment variables from .env
 dotenv.config();
-dns.setServers( ['8.8.8.8', '1.1.1.1'] );
+dns.setServers( ['8.8.8.8', '1.1.1.1', '0.0.0.0'] );
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
