@@ -51,38 +51,18 @@ import {
   Menu,
   X,
   CheckCircle2,
-  Database
+  Database,
+  Save,
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 
 export default function App() {
-  // Persistence with multi-class support (Nursery to 8th A/B)
-  const [classes, setClasses] = useState<ClassData[]>(() => {
-    const saved = localStorage.getItem('edugrade_all_classes_v3');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length >= 10) return parsed;
-      } catch (e) {
-        console.error('Error loading saved classes', e);
-      }
-    }
-    return DEFAULT_CLASSES;
-  });
-
-  const [activeClassId, setActiveClassId] = useState<string>(() => {
-    const saved = localStorage.getItem('edugrade_active_class_id');
-    return saved || 'class_nursery';
-  });
-
-  const [schoolConfig, setSchoolConfig] = useState<SchoolConfig>(() => {
-    const saved = localStorage.getItem('edugrade_school_config');
-    return saved ? JSON.parse(saved) : DEFAULT_SCHOOL_CONFIG;
-  });
-
+  // Pure Cloud State - NO data stored on local machines
+  const [classes, setClasses] = useState<ClassData[]>(DEFAULT_CLASSES);
+  const [activeClassId, setActiveClassId] = useState<string>('class_nursery');
+  const [schoolConfig, setSchoolConfig] = useState<SchoolConfig>(DEFAULT_SCHOOL_CONFIG);
   const [gradingRules] = useState<GradingRule[]>(DEFAULT_GRADING_RULES);
-
-  // Active view tab: 'quarterly' | 'half_yearly' | 'comparative' | 'analytics'
-  const [activeTab, setActiveTab] = useState<'quarterly' | 'half_yearly' | 'comparative' | 'analytics'>('quarterly');
 
   // Modals & Navigation state
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
@@ -95,78 +75,143 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isStorageModalOpen, setIsStorageModalOpen] = useState(false);
   const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
-  const [storageDefaultTab, setStorageDefaultTab] = useState<'local' | 'mongodb'>('local');
-  const [isMongoConnected, setIsMongoConnected] = useState(false);
-  const [mongoAutoSaveStatus, setMongoAutoSaveStatus] = useState<'saved' | 'saving' | 'synced'>('saved');
+  const [storageDefaultTab, setStorageDefaultTab] = useState<'local' | 'mongodb'>('mongodb');
 
-  // Check MongoDB connection status on startup
+  // MongoDB Cloud Sync State
+  const [isMongoConnected, setIsMongoConnected] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+  const [syncToast, setSyncToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setSyncToast({ type, message });
+    setTimeout(() => {
+      setSyncToast(null);
+    }, 4500);
+  };
+
+  // Active view tab: 'quarterly' | 'half_yearly' | 'comparative' | 'analytics'
+  const [activeTab, setActiveTab] = useState<'quarterly' | 'half_yearly' | 'comparative' | 'analytics'>('quarterly');
+
+  // SAVE TO MONGODB ACTION
+  const handleSaveToMongoDB = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch('/api/mongodb/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classes, schoolConfig }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsMongoConnected(true);
+        setHasUnsavedChanges(false);
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setLastSavedTime(timeStr);
+        showToast('success', `Saved ${classes.length} classes directly to MongoDB Atlas (${timeStr})`);
+      } else {
+        showToast('error', data.error || 'Failed to save to MongoDB');
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Network error saving to MongoDB');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // REFRESH FROM MONGODB ACTION
+  const handleRefreshFromMongoDB = async () => {
+    setIsRefreshing(true);
+    try {
+      const res = await fetch('/api/mongodb/pull');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.classes) && data.classes.length > 0) {
+        setClasses(data.classes);
+        if (data.schoolConfig) {
+          setSchoolConfig(data.schoolConfig);
+        }
+        setIsMongoConnected(true);
+        setHasUnsavedChanges(false);
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setLastSavedTime(timeStr);
+        showToast('success', `Refreshed ${data.classes.length} classes from MongoDB Atlas!`);
+      } else if (data.success && data.classes.length === 0) {
+        // If cluster is freshly created with no data, seed once
+        await handleSaveToMongoDB();
+        showToast('success', 'Seeded initial classes to MongoDB Atlas');
+      } else {
+        showToast('error', data.error || 'Could not fetch data from MongoDB');
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Network error connecting to MongoDB');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Initial load directly from MongoDB (No localStorage used!)
   useEffect(() => {
+    // Clear any local storage on the machine to guarantee 100% cloud-only MongoDB operation
+    try {
+      localStorage.clear();
+    } catch (e) {}
+
+    // Check MongoDB connection status
     fetch('/api/mongodb/status')
       .then((res) => res.json())
       .then((data) => {
         setIsMongoConnected(Boolean(data?.connected));
       })
       .catch(() => setIsMongoConnected(false));
-  }, []);
 
-  // On mount: pull data from MongoDB cloud; if empty, seed with initial 16 classes
-  useEffect(() => {
+    // Pull from MongoDB on load
     fetch('/api/mongodb/pull')
       .then((res) => res.json())
       .then((data) => {
-        if (data?.success && Array.isArray(data.classes) && data.classes.length >= 10) {
+        if (data?.success && Array.isArray(data.classes) && data.classes.length > 0) {
           setClasses(data.classes);
           if (data.schoolConfig) {
             setSchoolConfig(data.schoolConfig);
           }
+          setIsMongoConnected(true);
+          const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          setLastSavedTime(timeStr);
         } else {
-          // MongoDB has no classes yet: push the complete Nursery to 8th classes
+          // If MongoDB has no classes, seed once
           fetch('/api/mongodb/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ classes: DEFAULT_CLASSES, schoolConfig: DEFAULT_SCHOOL_CONFIG }),
-          }).catch(() => {});
+          })
+            .then((r) => r.json())
+            .then((res) => {
+              if (res.success) {
+                setIsMongoConnected(true);
+                const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                setLastSavedTime(timeStr);
+              }
+            })
+            .catch(() => {});
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error('Initial MongoDB load error:', err);
+      });
   }, []);
 
-  // Automated background sync: every change to classes or config automatically saves to MongoDB
+  // Keyboard shortcut: Ctrl+S or Cmd+S to save to MongoDB
   useEffect(() => {
-    setMongoAutoSaveStatus('saving');
-    const timer = setTimeout(() => {
-      fetch('/api/mongodb/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ classes, schoolConfig }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.success) {
-            setMongoAutoSaveStatus('saved');
-            if (data.mode === 'mongodb') setIsMongoConnected(true);
-          }
-        })
-        .catch(() => {
-          setMongoAutoSaveStatus('saved');
-        });
-    }, 600);
-
-    return () => clearTimeout(timer);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSaveToMongoDB();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [classes, schoolConfig]);
-
-  // Sync to localStorage
-  useEffect(() => {
-    localStorage.setItem('edugrade_all_classes_v3', JSON.stringify(classes));
-  }, [classes]);
-
-  useEffect(() => {
-    localStorage.setItem('edugrade_active_class_id', activeClassId);
-  }, [activeClassId]);
-
-  useEffect(() => {
-    localStorage.setItem('edugrade_school_config', JSON.stringify(schoolConfig));
-  }, [schoolConfig]);
 
   // Current active class reference
   const currentClass = classes.find((c) => c.id === activeClassId) || classes[0] || DEFAULT_CLASSES[0];
@@ -199,6 +244,7 @@ export default function App() {
 
   // Helper to update current class in classes array
   const updateCurrentClass = (updater: (prev: ClassData) => ClassData) => {
+    setHasUnsavedChanges(true);
     setClasses((prevList) =>
       prevList.map((cls) => (cls.id === currentClass.id ? updater(cls) : cls))
     );
@@ -384,11 +430,13 @@ export default function App() {
 
   // Class Management Handlers
   const handleCreateClass = (newClass: ClassData) => {
+    setHasUnsavedChanges(true);
     setClasses((prev) => [...prev, newClass]);
     setActiveClassId(newClass.id);
   };
 
   const handleUpdateClass = (classId: string, name: string, section: string) => {
+    setHasUnsavedChanges(true);
     setClasses((prev) =>
       prev.map((c) => (c.id === classId ? { ...c, name, section } : c))
     );
@@ -399,6 +447,7 @@ export default function App() {
       alert('You cannot delete the only remaining class.');
       return;
     }
+    setHasUnsavedChanges(true);
     const remaining = classes.filter((c) => c.id !== classId);
     setClasses(remaining);
     if (activeClassId === classId) {
@@ -410,6 +459,7 @@ export default function App() {
     const target = classes.find((c) => c.id === classId);
     if (!target) return;
 
+    setHasUnsavedChanges(true);
     const nextSectionChar = String.fromCharCode(target.section.charCodeAt(0) + 1);
     const newId = 'class_' + Date.now();
 
@@ -431,6 +481,7 @@ export default function App() {
 
   // Data Restore & Reset Handlers for Storage Modal
   const handleRestoreAllData = (newClasses: ClassData[], newConfig?: SchoolConfig) => {
+    setHasUnsavedChanges(true);
     setClasses(newClasses);
     if (newClasses.length > 0) {
       setActiveClassId(newClasses[0].id);
@@ -492,23 +543,49 @@ export default function App() {
               {/* PWA Install Button */}
               <PWAInstallButton />
 
-              {/* Automated MongoDB Auto-Save Indicator (No manual button) */}
-              <div
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200"
-                title={isMongoConnected ? 'All data is automatically synchronized to MongoDB' : 'Auto-saving data to local & MongoDB cache'}
+              {/* SAVE TO MONGODB BUTTON */}
+              <button
+                onClick={handleSaveToMongoDB}
+                disabled={isSaving}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all shadow-xs ${
+                  hasUnsavedChanges
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
+                    : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
+                }`}
+                title="Save all class data and marks directly to MongoDB Atlas (Ctrl+S)"
               >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    isMongoConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
-                  }`}
-                />
-                <span className="text-[11px]">
-                  {mongoAutoSaveStatus === 'saving'
-                    ? 'Saving...'
-                    : isMongoConnected
-                    ? 'MongoDB Synced'
-                    : 'Auto-Saved'}
-                </span>
+                {isSaving ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? 'Saving...' : 'Save to MongoDB'}</span>
+                {hasUnsavedChanges && (
+                  <span className="w-2 h-2 rounded-full bg-amber-300 ring-2 ring-white animate-pulse" />
+                )}
+              </button>
+
+              {/* REFRESH FROM MONGODB BUTTON */}
+              <button
+                onClick={handleRefreshFromMongoDB}
+                disabled={isRefreshing}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors border border-slate-200"
+                title="Refresh and sync latest data from MongoDB Atlas"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${isRefreshing ? 'animate-spin text-amber-600' : ''}`} />
+                <span>{isRefreshing ? 'Syncing...' : 'Refresh'}</span>
+              </button>
+
+              {/* MongoDB Status Pill */}
+              <div
+                className="hidden xl:flex items-center gap-1.5 px-2 py-1 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600"
+                title={isMongoConnected ? 'Connected to MongoDB Atlas cluster' : 'Connecting to MongoDB...'}
+              >
+                <Database className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="font-semibold">{isMongoConnected ? 'MongoDB' : 'Connecting'}</span>
+                {lastSavedTime && (
+                  <span className="text-[10px] text-slate-400 font-mono">({lastSavedTime})</span>
+                )}
               </div>
 
               {/* Data Validation Status Badge */}
@@ -526,7 +603,7 @@ export default function App() {
                 ) : (
                   <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                 )}
-                <span>{validationReport.isValid ? '100% Valid' : `${validationReport.errorCount} Issues`}</span>
+                <span>{validationReport.isValid ? 'Valid' : `${validationReport.errorCount} Issues`}</span>
               </button>
 
               <button
@@ -553,7 +630,7 @@ export default function App() {
                 title="Print 4 Report Cards per A4 Page for All Students"
               >
                 <Printer className="w-3.5 h-3.5" />
-                <span>Print 4-on-A4 Cards</span>
+                <span>4-on-A4 Cards</span>
               </button>
 
               <button
@@ -565,21 +642,44 @@ export default function App() {
               </button>
             </div>
 
-            {/* Mobile Horizontal Controls: Cards Print + Burger Menu */}
-            <div className="flex md:hidden items-center gap-1.5 shrink-0">
+            {/* Mobile Horizontal Controls: Save + Refresh + Cards + Burger Menu */}
+            <div className="flex md:hidden items-center gap-1 shrink-0">
+              {/* Mobile Save Button */}
+              <button
+                onClick={handleSaveToMongoDB}
+                disabled={isSaving}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-extrabold shadow-xs ${
+                  hasUnsavedChanges ? 'bg-emerald-600 text-white ring-2 ring-emerald-300' : 'bg-emerald-500 text-slate-950'
+                }`}
+                title="Save to MongoDB"
+              >
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                <span>Save</span>
+              </button>
+
+              {/* Mobile Refresh Button */}
+              <button
+                onClick={handleRefreshFromMongoDB}
+                disabled={isRefreshing}
+                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+                title="Refresh and sync data from MongoDB"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-600' : ''}`} />
+              </button>
+
               <button
                 onClick={() => setIsBatchCardsOpen(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-500 shadow-xs"
+                className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-500 shadow-xs"
                 title="Print 4 Cards per A4 Page"
               >
                 <Printer className="w-3.5 h-3.5" />
-                <span>Cards</span>
+                <span className="hidden xs:inline">Cards</span>
               </button>
 
               {/* Hamburger Button for Mobile */}
               <button
                 onClick={() => setIsMobileNavOpen(!isMobileNavOpen)}
-                className="p-1.5 sm:p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors"
+                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors"
                 aria-label="Toggle navigation menu"
                 title="Open menu"
               >
@@ -798,12 +898,38 @@ export default function App() {
               </button>
             </div>
 
-            {/* Cloud Auto-Save Status Banner */}
-            <div className="p-3 bg-emerald-50 border-b border-emerald-200 flex items-center gap-2 text-xs text-emerald-900 font-medium">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <div>
-                <p className="font-bold text-[11px]">Saved in MongoDB Only</p>
-                <p className="text-[10px] text-emerald-700">All data automatically synchronized</p>
+            {/* Cloud MongoDB Sync Actions */}
+            <div className="p-3 bg-emerald-50/70 border-b border-emerald-200 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5 font-bold text-slate-800">
+                  <Database className="w-3.5 h-3.5 text-emerald-600" />
+                  MongoDB Atlas
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">
+                  {lastSavedTime ? `Synced: ${lastSavedTime}` : 'Cloud Connected'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={async () => {
+                    await handleSaveToMongoDB();
+                  }}
+                  disabled={isSaving}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs"
+                >
+                  {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  <span>{isSaving ? 'Saving...' : 'Save Data'}</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    await handleRefreshFromMongoDB();
+                  }}
+                  disabled={isRefreshing}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs border border-slate-300"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-600' : ''}`} />
+                  <span>{isRefreshing ? 'Syncing...' : 'Refresh'}</span>
+                </button>
               </div>
             </div>
 
@@ -1101,6 +1227,24 @@ export default function App() {
         onResetAllData={handleResetAllData}
         defaultTab={storageDefaultTab}
       />
+
+      {/* Floating Sync Toast Notification */}
+      {syncToast && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-bold border transition-all animate-in slide-in-from-bottom duration-200 ${
+            syncToast.type === 'success'
+              ? 'bg-slate-900 text-white border-emerald-500 shadow-emerald-950/20'
+              : 'bg-rose-950 text-white border-rose-500 shadow-rose-950/20'
+          }`}
+        >
+          {syncToast.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+          )}
+          <span>{syncToast.message}</span>
+        </div>
+      )}
     </div>
   );
 }

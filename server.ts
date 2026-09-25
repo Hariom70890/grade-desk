@@ -13,14 +13,6 @@ dns.setServers( ['8.8.8.8', '1.1.1.1'] );
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'mongodb_cache.json');
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch (e) {}
-}
-
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -190,27 +182,6 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
     });
   }
 
-  // Always write backup to local cache first
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ classes, schoolConfig, updatedAt: new Date() }), 'utf-8');
-  } catch (fsErr) {
-    console.error('Local backup write warning:', fsErr);
-  }
-
-  const hasMongo = Boolean(customUri || process.env.MONGODB_URI);
-
-  if (!hasMongo) {
-    const totalStudents = classes.reduce((sum: number, c: any) => sum + (c.students?.length || 0), 0);
-    return res.json({
-      success: true,
-      mode: 'local_cache',
-      message: `Persisted ${classes.length} classes and ${totalStudents} students. Configure MONGODB_URI to stream directly to MongoDB Atlas.`,
-      syncedAt: new Date().toISOString(),
-      classesCount: classes.length,
-      studentsCount: totalStudents,
-    });
-  }
-
   try {
     const { client, dbName } = await getMongoClient(customUri);
     const db = client.db(dbName);
@@ -218,6 +189,10 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
     const classesCol = db.collection('classes');
     const configCol = db.collection('school_config');
     const historyCol = db.collection('sync_history');
+
+    // Remove any classes that are no longer in the payload
+    const classIds = classes.map((cls: any) => cls.id);
+    await classesCol.deleteMany({ id: { $nin: classIds } });
 
     // Upsert each class record
     const bulkOps = classes.map((cls: any) => ({
@@ -256,7 +231,7 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
     res.json({
       success: true,
       mode: 'mongodb',
-      message: `Successfully synchronized ${classes.length} classes and ${totalStudents} students to MongoDB!`,
+      message: `Successfully saved ${classes.length} classes and ${totalStudents} students!`,
       syncedAt: new Date().toISOString(),
       classesCount: classes.length,
       studentsCount: totalStudents,
@@ -271,66 +246,37 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
 
 // Pull data from MongoDB (Load / Restore)
 app.get('/api/mongodb/pull', async (req: Request, res: Response) => {
-  const hasMongo = Boolean(process.env.MONGODB_URI);
-
-  if (hasMongo) {
-    try {
-      const { client, dbName } = await getMongoClient();
-      const db = client.db(dbName);
-
-      const classesCol = db.collection('classes');
-      const configCol = db.collection('school_config');
-
-      const classes = await classesCol.find({}).toArray();
-      const configDoc = await configCol.findOne({ _id: 'current_config' as any });
-
-      if (classes.length > 0) {
-        const cleanedClasses = classes.map(({ _id, updatedAt, ...rest }) => rest);
-        let cleanedConfig = null;
-        if (configDoc) {
-          const { _id, updatedAt, ...rest } = configDoc;
-          cleanedConfig = rest;
-        }
-
-        return res.json({
-          success: true,
-          source: 'mongodb',
-          classes: cleanedClasses,
-          schoolConfig: cleanedConfig,
-          count: cleanedClasses.length,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    } catch (err: any) {
-      console.warn('MongoDB pull error, trying local cache fallback:', err.message);
-    }
-  }
-
-  // Fallback to local cache if mongo not configured or had error
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const cached = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-      if (cached && Array.isArray(cached.classes) && cached.classes.length > 0) {
-        return res.json({
-          success: true,
-          source: 'local_cache',
-          classes: cached.classes,
-          schoolConfig: cached.schoolConfig || null,
-          count: cached.classes.length,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    }
-  } catch (e) {}
+    const { client, dbName } = await getMongoClient();
+    const db = client.db(dbName);
 
-  res.json({
-    success: true,
-    source: 'empty',
-    classes: [],
-    schoolConfig: null,
-    count: 0,
-    timestamp: new Date().toISOString(),
-  });
+    const classesCol = db.collection('classes');
+    const configCol = db.collection('school_config');
+
+    const classes = await classesCol.find({}).toArray();
+    const configDoc = await configCol.findOne({ _id: 'current_config' as any });
+
+    const cleanedClasses = classes.map(({ _id, updatedAt, ...rest }) => rest);
+    let cleanedConfig = null;
+    if (configDoc) {
+      const { _id, updatedAt, ...rest } = configDoc;
+      cleanedConfig = rest;
+    }
+
+    res.json({
+      success: true,
+      source: 'mongodb',
+      classes: cleanedClasses,
+      schoolConfig: cleanedConfig,
+      count: cleanedClasses.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Failed to pull data from MongoDB',
+    });
+  }
 });
 
 // Server-side Data Validation Endpoint
