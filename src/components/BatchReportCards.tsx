@@ -191,47 +191,41 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                         <h3 className="font-extrabold text-[11px] sm:text-[12px] uppercase text-stone-900 tracking-tight leading-tight">
                           {schoolConfig.schoolName}
                         </h3>
-                        <p className="text-[8px] text-stone-600 font-medium leading-none mt-0.5 truncate">
+                        <p className="text-[12px] text-stone-600 font-medium leading-none mt-0.5 truncate">
                           {schoolConfig.schoolSubtitle}
                         </p>
-                        <div className="mt-1 inline-block bg-amber-100 text-stone-900 px-2 py-0.5 rounded text-[8px] sm:text-[9px] font-black uppercase tracking-wider border border-amber-300">
-                          {examTitle} • {schoolConfig.academicYear}
+                        <div className="mt-1 inline-block bg-amber-100 text-stone-900 px-2 py-0.5 rounded text-[12px] sm:text-[9px] font-black uppercase tracking-wider border border-amber-300">
+                          {examTitle} 
                         </div>
                       </div>
 
                       {/* Student Details Grid */}
                       <div className="grid grid-cols-2 gap-x-2 gap-y-1 bg-amber-50/40 p-1.5 rounded border border-amber-200/80 my-1.5 text-[9px] relative z-10">
                         <div className="truncate">
-                          <span className="text-stone-500 text-[8px] block leading-none">Student Name</span>
-                          <span className="font-black text-stone-900 text-[10px] leading-tight truncate block">
+                          <span className="text-stone-500 text-[12px] block leading-none">Student Name</span>
+                          <span className="font-black text-stone-900 text-[16px] leading-tight truncate block">
                             {result.student.name}
                           </span>
                         </div>
                         <div>
-                          <span className="text-stone-500 text-[8px] block leading-none">Roll No</span>
-                          <span className="font-bold text-stone-800 text-[10px] leading-tight">
+                          <span className="text-stone-500 text-[12px] block leading-none">Roll No</span>
+                          <span className="font-bold text-stone-800 text-[16px] leading-tight">
                             {result.student.rollNo || `#${result.student.sNo}`}
                           </span>
                         </div>
                         <div>
-                          <span className="text-stone-500 text-[8px] block leading-none">Class & Sec</span>
+                          <span className="text-stone-500 text-[12px] block leading-none">Class & Sec</span>
                           <span className="font-bold text-stone-800 text-[9px] leading-tight">
                             {schoolConfig.className} - {schoolConfig.section}
                           </span>
-                        </div>
-                        <div>
-                          <span className="text-stone-500 text-[8px] block leading-none">Attendance</span>
-                          <span className="font-bold text-stone-800 text-[9px] leading-tight">
-                            {attendanceDays}/{totalDays} ({attendancePercent}%)
-                          </span>
-                        </div>
+                        </div> 
                       </div>
 
                       {/* Compact Marks Table */}
-                      <div className="relative z-10 flex-1 my-1">
+                      <div className="relative z-10 flex-1 my-1 ">
                         <table className="w-full text-left text-[8.5px] border border-stone-300 rounded overflow-hidden">
                           <thead>
-                            <tr className="bg-stone-100 text-stone-900 border-b border-stone-300 font-black uppercase text-[8px]">
+                            <tr className="bg-stone-100 text-stone-900 border-b border-stone-300 font-black uppercase text-[12px]">
                               <th className="py-0.5 px-1.5">Subject</th>
                               <th className="py-0.5 px-1 text-center">Max</th>
                               <th className="py-0.5 px-1 text-center">Pass</th>
@@ -239,7 +233,7 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                               <th className="py-0.5 px-1 text-center">Status</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-stone-200">
+                          <tbody className="divide-y divide-stone-200 text-[12px]">
                             {subjects.map((sub, i) => {
                               const mark = result.marks[sub.id];
                               const hasMark = mark !== undefined && mark !== null;
@@ -278,45 +272,47 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                               <td className="py-1 px-1 text-center font-black text-stone-950 text-[9.5px]">
                                 {result.totalObtained}
                               </td>
-                              <td className="py-1 px-1 text-center text-[8px] font-bold text-emerald-800">
+                              <td className="py-1 px-1 text-center text-[12px] font-bold text-emerald-800">
                                 {result.percentage}%
                               </td>
                             </tr>
                           </tbody>
                         </table>
+                     
                       </div>
 
+                      
                       {/* Rank, Grade & Remark Summary */}
-                      <div className="grid grid-cols-3 gap-1 bg-stone-50 border border-stone-200 rounded p-1 text-center my-1 relative z-10 text-[8px]">
+                      <div className="grid grid-cols-3 gap-1 bg-stone-50 border border-stone-200 rounded p-1 text-center my-1 relative z-10 text-[12px]">
                         <div>
-                          <span className="text-stone-500 block text-[7px] leading-tight">Rank</span>
-                          <span className="font-extrabold text-amber-700 text-[9px] leading-tight">
+                          <span className="text-stone-500 block  leading-tight">Rank</span>
+                          <span className="font-extrabold text-amber-700  leading-tight">
                             #{result.rank}
                           </span>
                         </div>
                         <div>
-                          <span className="text-stone-500 block text-[7px] leading-tight">Grade</span>
-                          <span className="font-extrabold text-stone-800 text-[9px] leading-tight">
+                          <span className="text-stone-500 block leading-tight">Grade</span>
+                          <span className="font-extrabold text-stone-800 leading-tight">
                             {result.grade}
                           </span>
                         </div>
                         <div className="truncate">
-                          <span className="text-stone-500 block text-[7px] leading-tight">Remark</span>
-                          <span className="font-bold text-stone-700 text-[8px] leading-tight truncate block">
+                          <span className="text-stone-500 block  leading-tight">Remark</span>
+                          <span className="font-bold text-stone-700 text-[12px] leading-tight truncate block">
                             {result.remark}
                           </span>
                         </div>
                       </div>
 
                       {/* Signatures */}
-                      <div className="pt-2 border-t border-dashed border-stone-300 grid grid-cols-2 gap-2 text-center text-[8px] text-stone-600 relative z-10 mt-auto">
+                      <div className="pt-5 pb-2 border-t border-dashed border-stone-300 grid grid-cols-2 gap-2 text-center text-[12px] text-stone-600 relative z-10 mt-auto">
                         <div>
-                          <div className="h-4 border-b border-stone-400 mb-0.5"></div>
-                          <span className="font-bold">Class Teacher</span>
+                          <div className="h-4  border-stone-400 mb-0.5"></div>
+                          {/* <span className="font-bold">Principal</span> */}
                         </div>
                         <div>
-                          <div className="h-4 border-b border-stone-400 mb-0.5"></div>
-                          <span className="font-bold">Principal</span>
+                          <div className="h-6 border-b border-stone-400 mb-0.5"></div>
+                          <span className="font-bold">Class Teacher</span>
                         </div>
                       </div>
                     </div>
@@ -373,19 +369,19 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                 {/* Student info */}
                 <div className="grid grid-cols-4 gap-3 bg-amber-50/50 p-3 rounded-xl border border-amber-200 my-4 text-xs">
                   <div>
-                    <span className="text-slate-500 text-[10px] block font-semibold">Student Name</span>
+                    <span className="text-slate-500 text-[16px] block font-semibold">Student Name</span>
                     <span className="font-extrabold text-slate-900">{result.student.name}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 text-[10px] block font-semibold">Roll No</span>
+                    <span className="text-slate-500 text-[16px] block font-semibold">Roll No</span>
                     <span className="font-bold text-slate-800">{result.student.rollNo || `#${result.student.sNo}`}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 text-[10px] block font-semibold">Class & Section</span>
+                    <span className="text-slate-500 text-[16px] block font-semibold">Class & Section</span>
                     <span className="font-bold text-slate-800">{schoolConfig.className} - {schoolConfig.section}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 text-[10px] block font-semibold">Attendance</span>
+                    <span className="text-slate-500 text-[16px] block font-semibold">Attendance</span>
                     <span className="font-bold text-slate-800">{attendanceDays}/{totalDays} ({attendancePercent}%)</span>
                   </div>
                 </div>
@@ -393,7 +389,7 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                 {/* Subject Marks Table */}
                 <table className="w-full text-left text-xs border border-slate-300 rounded-lg overflow-hidden my-4">
                   <thead>
-                    <tr className="bg-amber-100 text-slate-900 border-b border-slate-300 font-bold uppercase text-[10px]">
+                    <tr className="bg-amber-100 text-slate-900 border-b border-slate-300 font-bold uppercase text-[16px]">
                       <th className="py-2 px-3 text-center">#</th>
                       <th className="py-2 px-4">Subject</th>
                       <th className="py-2 px-3 text-center">Max Marks</th>
@@ -426,9 +422,9 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                           <td className="py-2 px-3 text-center">
                             {hasMark ? (
                               isPass ? (
-                                <span className="text-[10px] font-bold text-emerald-700">PASS</span>
+                                <span className="text-[16px] font-bold text-emerald-700">PASS</span>
                               ) : (
-                                <span className="text-[10px] font-bold text-red-600">NEEDS WORK</span>
+                                <span className="text-[16px] font-bold text-red-600">NEEDS WORK</span>
                               )
                             ) : (
                               <span className="text-slate-400">--</span>
@@ -457,15 +453,15 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                 {/* Bottom Result summary */}
                 <div className="grid grid-cols-3 gap-3 my-4 text-center text-xs">
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
-                    <span className="text-[10px] text-slate-500 block">Class Standing</span>
+                    <span className="text-[16px] text-slate-500 block">Class Standing</span>
                     <span className="font-extrabold text-amber-600 text-lg">Rank #{result.rank}</span>
                   </div>
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
-                    <span className="text-[10px] text-slate-500 block">Grade</span>
+                    <span className="text-[16px] text-slate-500 block">Grade</span>
                     <span className="font-extrabold text-slate-800 text-lg">Grade {result.grade}</span>
                   </div>
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
-                    <span className="text-[10px] text-slate-500 block">Teacher Remark</span>
+                    <span className="text-[16px] text-slate-500 block">Teacher Remark</span>
                     <span className="font-bold text-amber-900 text-xs px-2 py-0.5 bg-amber-100 rounded-full inline-block mt-1">
                       {result.remark}
                     </span>
