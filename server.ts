@@ -1,15 +1,13 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
-import fs from 'fs';
-import dns from 'dns';
 import { fileURLToPath } from 'url';
 import { MongoClient, ServerApiVersion } from 'mongodb';
 
 // Load environment variables from .env
 dotenv.config();
 
-const __filename = fileURLToPath( import.meta.url );
+const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
@@ -18,31 +16,67 @@ const PORT = process.env.PORT || 8080;
 // Enable JSON body parsing with high limit for batch tabulation data
 app.use(express.json({ limit: '25mb' }));
 
-// Cached MongoDB client instance
+// -------------------------------------------------------------
+// Single source of truth for the MongoDB connection.
+//
+// Every real data endpoint (status/sync/pull) goes through
+// getMongoClient(), which ALWAYS uses process.env.MONGODB_URI —
+// nothing from a request body can redirect reads or writes to a
+// different cluster or database. If MONGODB_URI changes (e.g. you
+// edit .env and restart), the previous cached connection is closed
+// and a fresh one is opened, so stale data from an old URI can never
+// be served.
+// -------------------------------------------------------------
 let cachedClient: MongoClient | null = null;
 let cachedUri: string | null = null;
+let cachedDbName: string = '';
 
-async function getMongoClient(uri?: string): Promise<{ client: MongoClient; dbName: string }> {
-  const targetUri = uri || process.env.MONGODB_URI;
-  if (!targetUri) {
-    throw new Error('MONGODB_URI is not set in environment or provided in request');
-  }
-// console.log("mogno uri -", targetUri)    I am getting it correct
-  // Parse DB name from URI or use default
-  let dbName = 'grade-desk';
+/**
+ * Pulls the database name out of a mongodb:// or mongodb+srv:// URI's
+ * path segment, e.g. ".../myCluster.mongodb.net/gradedesk?retryWrites=..."
+ * -> "gradedesk". Returns '' if the URI doesn't specify one, in which
+ * case the driver's own default (the db named in the URI, or "test")
+ * is used instead.
+ */
+function extractDbName(uri: string): string {
   try {
-    const urlObj = new URL(targetUri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://'));
+    const urlObj = new URL(uri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://'));
     const pathname = urlObj.pathname.replace(/^\//, '');
     if (pathname && !pathname.includes('?')) {
-      dbName = pathname;
+      return pathname;
     }
-  } catch (e) {
-    // Fallback if URL parsing fails
+  } catch (e: any) {
+    console.warn('Could not parse a database name out of MONGODB_URI, using the driver default instead:', e?.message);
+  }
+  return '';
+}
+
+async function getMongoClient(): Promise<{ client: MongoClient; dbName: string }> {
+  const targetUri = process.env.MONGODB_URI;
+  if (!targetUri) {
+    throw new Error('MONGODB_URI is not set in environment (.env)');
   }
 
+  // Fast path: already connected to exactly this URI.
   if (cachedClient && cachedUri === targetUri) {
-    return { client: cachedClient, dbName };
+    return { client: cachedClient, dbName: cachedDbName };
   }
+
+  // The URI changed since the last connection (env var was updated and the
+  // server restarted, or dotenv was reloaded) — close the old connection so
+  // we never keep silently serving data from a previous cluster.
+  if (cachedClient && cachedUri !== targetUri) {
+    try {
+      await cachedClient.close();
+    } catch {
+      // ignore errors closing a stale connection
+    }
+    cachedClient = null;
+    cachedUri = null;
+    cachedDbName = '';
+  }
+
+  const dbName = extractDbName(targetUri);
 
   const client = new MongoClient(targetUri, {
     serverApi: {
@@ -57,8 +91,14 @@ async function getMongoClient(uri?: string): Promise<{ client: MongoClient; dbNa
   await client.connect();
   cachedClient = client;
   cachedUri = targetUri;
+  cachedDbName = dbName;
 
   return { client, dbName };
+}
+
+/** client.db('') is not the same as "use the URI's default database" — guard it. */
+function getDb(client: MongoClient, dbName: string) {
+  return dbName ? client.db(dbName) : client.db();
 }
 
 // -------------------------------------------------------------
@@ -76,24 +116,22 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// MongoDB Connection Status & Latency Check
+// MongoDB Connection Status & Latency Check — always the configured URI.
 app.get('/api/mongodb/status', async (req: Request, res: Response) => {
-  const configuredUri = process.env.MONGODB_URI;
-
-  if (!configuredUri) {
+  if (!process.env.MONGODB_URI) {
     return res.json({
       configured: false,
       connected: false,
       message: 'MONGODB_URI is not set in environment variables (.env)',
-      recommendation: 'Add MONGODB_URI to your .env file or Vercel Environment Variables.',
+      recommendation: 'Add MONGODB_URI to your .env file or hosting provider\'s Environment Variables.',
     });
   }
 
   const startTime = Date.now();
   try {
-    const { client, dbName } = await getMongoClient(configuredUri);
-    const db = client.db(dbName);
-    
+    const { client, dbName } = await getMongoClient();
+    const db = getDb(client, dbName);
+
     // Ping the deployment
     await db.command({ ping: 1 });
     const latencyMs = Date.now() - startTime;
@@ -110,7 +148,7 @@ app.get('/api/mongodb/status', async (req: Request, res: Response) => {
     res.json({
       configured: true,
       connected: true,
-      dbName,
+      dbName: db.databaseName,
       latencyMs,
       collections: collectionNames,
       classesInCloud: classesCount,
@@ -125,7 +163,10 @@ app.get('/api/mongodb/status', async (req: Request, res: Response) => {
   }
 });
 
-// Test custom or provided MongoDB URI
+// Test-connect to an arbitrary URI, purely for verification. This is
+// intentionally isolated from getMongoClient()/cachedClient — it never
+// touches or replaces the live connection used by sync/pull, so pasting a
+// URI in here to "test" it can never redirect where your real data goes.
 app.post('/api/mongodb/test', async (req: Request, res: Response) => {
   const { uri } = req.body;
   const targetUri = uri || process.env.MONGODB_URI;
@@ -137,7 +178,6 @@ app.post('/api/mongodb/test', async (req: Request, res: Response) => {
     });
   }
 
-  // Basic format sanity check
   if (!targetUri.startsWith('mongodb://') && !targetUri.startsWith('mongodb+srv://')) {
     return res.status(400).json({
       success: false,
@@ -146,33 +186,58 @@ app.post('/api/mongodb/test', async (req: Request, res: Response) => {
   }
 
   const startTime = Date.now();
+  let testClient: MongoClient | null = null;
   try {
-    const { client, dbName } = await getMongoClient(targetUri);
-    const db = client.db(dbName);
+    testClient = new MongoClient(targetUri, {
+      serverApi: { version: ServerApiVersion.v1, strict: false, deprecationErrors: true },
+      connectTimeoutMS: 8000,
+      serverSelectionTimeoutMS: 8000,
+    });
+    await testClient.connect();
+    const dbName = extractDbName(targetUri);
+    const db = dbName ? testClient.db(dbName) : testClient.db();
     await db.command({ ping: 1 });
     const latencyMs = Date.now() - startTime;
 
-    // Mask password in response for security
     const maskedUri = targetUri.replace(/:(.*?)@/, ':******@');
+    const isActiveUri = targetUri === process.env.MONGODB_URI;
 
     res.json({
       success: true,
       message: 'Successfully connected to MongoDB cluster!',
       latencyMs,
-      dbName,
+      dbName: db.databaseName,
       maskedUri,
+      isActiveUri,
+      note: isActiveUri
+        ? undefined
+        : 'This URI is NOT your configured MONGODB_URI — it was only tested, nothing was read or written to it.',
     });
   } catch (err: any) {
     res.status(500).json({
       success: false,
       error: err.message || 'Connection failed',
     });
+  } finally {
+    if (testClient) {
+      try {
+        await testClient.close();
+      } catch {
+        // ignore
+      }
+    }
   }
 });
 
-// Sync data to MongoDB (Push / Cloud Backup)
+// Sync data to MongoDB (Push / Cloud Backup) — always the configured URI.
+// Any `customUri` in the request body is intentionally ignored: this
+// endpoint must only ever write to process.env.MONGODB_URI.
 app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
-  const { classes, schoolConfig, customUri } = req.body;
+  const { classes, schoolConfig } = req.body;
+
+  if (req.body.customUri) {
+    console.warn('[mongodb/sync] Ignoring customUri from request body — writes always go to the configured MONGODB_URI.');
+  }
 
   if (!classes || !Array.isArray(classes)) {
     return res.status(400).json({
@@ -182,8 +247,8 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
   }
 
   try {
-    const { client, dbName } = await getMongoClient(customUri);
-    const db = client.db(dbName);
+    const { client, dbName } = await getMongoClient();
+    const db = getDb(client, dbName);
 
     const classesCol = db.collection('classes');
     const configCol = db.collection('school_config');
@@ -222,6 +287,7 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
     const totalStudents = classes.reduce((sum: number, c: any) => sum + (c.students?.length || 0), 0);
     await historyCol.insertOne({
       syncedAt: new Date(),
+      dbName: db.databaseName,
       totalClasses: classes.length,
       totalStudents,
       deviceInfo: req.headers['user-agent'] || 'Web Client',
@@ -230,6 +296,7 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
     res.json({
       success: true,
       mode: 'mongodb',
+      dbName: db.databaseName,
       message: `Successfully saved ${classes.length} classes and ${totalStudents} students!`,
       syncedAt: new Date().toISOString(),
       classesCount: classes.length,
@@ -243,11 +310,11 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
   }
 });
 
-// Pull data from MongoDB (Load / Restore)
+// Pull data from MongoDB (Load / Restore) — always the configured URI.
 app.get('/api/mongodb/pull', async (req: Request, res: Response) => {
   try {
     const { client, dbName } = await getMongoClient();
-    const db = client.db(dbName);
+    const db = getDb(client, dbName);
 
     const classesCol = db.collection('classes');
     const configCol = db.collection('school_config');
@@ -255,16 +322,17 @@ app.get('/api/mongodb/pull', async (req: Request, res: Response) => {
     const classes = await classesCol.find({}).toArray();
     const configDoc = await configCol.findOne({ _id: 'current_config' as any });
 
-    const cleanedClasses = classes.map(({ _id, updatedAt, ...rest }) => rest);
+    const cleanedClasses = classes.map(({ _id, updatedAt, ...rest }: any) => rest);
     let cleanedConfig = null;
     if (configDoc) {
-      const { _id, updatedAt, ...rest } = configDoc;
+      const { _id, updatedAt, ...rest } = configDoc as any;
       cleanedConfig = rest;
     }
 
     res.json({
       success: true,
       source: 'mongodb',
+      dbName: db.databaseName,
       classes: cleanedClasses,
       schoolConfig: cleanedConfig,
       count: cleanedClasses.length,
@@ -285,7 +353,6 @@ app.post('/api/validate', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'classes array is required' });
   }
 
-  // Server-side audit check
   const issues: any[] = [];
   let totalMarks = 0;
   let exceeding = 0;
@@ -314,7 +381,6 @@ app.post('/api/validate', (req: Request, res: Response) => {
       }
     });
 
-    // Check marks
     const checkMarks = (store: any, exam: string) => {
       cls.students?.forEach((st: any) => {
         cls.subjects?.forEach((sub: any) => {
@@ -374,7 +440,6 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Serve static build from dist
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
@@ -383,9 +448,9 @@ async function startServer() {
 
   app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`GradeDesk server running on http://0.0.0.0:${PORT} [${isProduction ? 'production' : 'development'}]`);
+    console.log(`MongoDB target: ${process.env.MONGODB_URI ? '(configured — see MONGODB_URI in .env)' : 'NOT CONFIGURED'}`);
   });
 }
-
 
 if (!process.env.VERCEL) {
   startServer().catch((err) => {

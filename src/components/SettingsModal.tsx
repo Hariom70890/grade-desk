@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { SchoolConfig, Subject } from '../types';
 import { Settings, Plus, Trash2, RotateCcw, X, Save, Check } from 'lucide-react';
-import { DEFAULT_SCHOOL_CONFIG, DEFAULT_SUBJECTS } from '../constants/initialData';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -212,9 +211,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               type="button"
               onClick={() => {
                 if (confirm('Reset subjects and school details back to initial 2026-27 sheet format?')) {
-                  onResetDefaults();
-                  setCfg({ ...DEFAULT_SCHOOL_CONFIG });
-                  setSubs([...DEFAULT_SUBJECTS]);
+                  onResetDefaults(); 
                 }
               }}
               className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-semibold"
