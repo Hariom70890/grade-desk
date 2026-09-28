@@ -1,15 +1,32 @@
-import React, {useState, useEffect} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import type {LucideIcon} from 'lucide-react';
 import {
-  Student,
-  SchoolConfig,
-  GradingRule,
-  ClassData
-} from './types';
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  ClipboardPaste,
+  Database,
+  FileSpreadsheet,
+  FolderPlus,
+  GraduationCap,
+  HardDrive,
+  Layers,
+  Loader2,
+  Menu,
+  Plus,
+  Printer,
+  RefreshCw,
+  Save,
+  School,
+  Settings,
+  ShieldCheck,
+  TrendingUp,
+  X,
+} from 'lucide-react';
 
-import {
-  computeStudentResults,
-  computeComparativeResults
-} from './utils/calculations';
+import {ClassData, GradingRule, SchoolConfig, Student} from './types';
+import {computeComparativeResults, computeStudentResults} from './utils/calculations';
+import {validateClassData} from './utils/dataValidation';
 import {TabulationSheet} from './components/TabulationSheet';
 import {RapidEntryModal} from './components/RapidEntryModal';
 import {StudentReportCard} from './components/StudentReportCard';
@@ -24,34 +41,19 @@ import {PWAInstallButton} from './components/PWAInstallButton';
 import {OfflineIndicator} from './components/OfflineIndicator';
 import {DataStorageModal} from './components/DataStorageModal';
 import {DataValidationModal} from './components/DataValidationModal';
-import {validateClassData} from './utils/dataValidation';
-import {
-  GraduationCap,
-  Layers,
-  TrendingUp,
-  BarChart3,
-  FileSpreadsheet,
-  Printer,
-  Settings,
-  ClipboardPaste,
-  Plus,
-  ShieldCheck,
-  AlertTriangle,
-  Menu,
-  X,
-  CheckCircle2,
-  Database,
-  Save,
-  RefreshCw,
-  Loader2,
-  School,
-  FolderPlus
-} from 'lucide-react';
 
-// Empty, non-fabricated placeholder used ONLY to satisfy the SchoolConfig shape
-// until real data is pulled from MongoDB. No school name / titles / years are
-// invented here — the Settings modal must be used to fill these in for real.
-const EMPTY_SCHOOL_CONFIG: SchoolConfig = {
+/* ------------------------------------------------------------------ */
+/* Constants & types                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Background sync interval. Change this one number to tune polling. */
+const POLL_INTERVAL_MS = 30_000;
+const TOAST_DURATION_MS = 4_500;
+const DEFAULT_ATTENDANCE_DAYS = 90;
+const DEFAULT_WORKING_DAYS = 92;
+
+// Empty placeholder only to satisfy the SchoolConfig shape until real data is pulled.
+const EMPTY_SCHOOL_CONFIG = {
   schoolName: '',
   quarterlyTitle: 'Quarterly Examination',
   halfYearlyTitle: 'Half Yearly Examination',
@@ -60,8 +62,6 @@ const EMPTY_SCHOOL_CONFIG: SchoolConfig = {
   section: '',
 } as SchoolConfig;
 
-// Positive, encouraging thoughts (Hindi) shown one at a time while the app
-// connects to MongoDB Atlas — just to make the wait feel a little nicer.
 const HINDI_POSITIVE_THOUGHTS: string[] = [
   'हर दिन एक नई शुरुआत है — आज भी कुछ अच्छा सिखाया जाएगा। ✨',
   'एक अच्छा शिक्षक दीपक की तरह होता है, खुद जलकर दूसरों को रोशन करता है। 🪔',
@@ -75,21 +75,164 @@ const HINDI_POSITIVE_THOUGHTS: string[] = [
   'आपकी मुस्कान किसी की सुबह बना सकती है — आज भी बनाइए। 😊',
 ];
 
+type Term = 'quarterly' | 'halfYearly';
+type TabId = 'quarterly' | 'half_yearly' | 'comparative' | 'analytics';
+type MarksMap = Record<string, Record<string, number | null>>;
+type ToastState = {type: 'success' | 'error'; message: string;} | null;
+
+interface PendingMark {
+  classId: string;
+  term: Term;
+  studentId: string;
+  subjectId: string;
+  mark: number | null;
+}
+
+const TABS: {
+  id: TabId;
+  label: string;
+  shortLabel: string;
+  icon: LucideIcon;
+  activeClass: string;
+}[] = [
+    {id: 'quarterly', label: 'Quarterly Examination (Term 1)', shortLabel: 'Term 1: Quarterly', icon: FileSpreadsheet, activeClass: 'bg-amber-500 text-slate-950 shadow-sm'},
+    {id: 'half_yearly', label: 'Half Yearly Examination (Term 2)', shortLabel: 'Term 2: Half-Yearly', icon: Layers, activeClass: 'bg-amber-500 text-slate-950 shadow-sm'},
+    {id: 'comparative', label: 'Comparative Growth (T1 vs T2)', shortLabel: 'Comparative Growth', icon: TrendingUp, activeClass: 'bg-indigo-600 text-white shadow-sm'},
+    {id: 'analytics', label: 'Performance Insights & Toppers', shortLabel: 'Performance Analytics', icon: BarChart3, activeClass: 'bg-slate-900 text-white shadow-sm'},
+  ];
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+/** fetch wrapper: throws on non-2xx and on `{success: false}` bodies. */
+async function api<T = any> ( url: string, init?: RequestInit & {json?: unknown;} ): Promise<T> {
+  const {json, ...rest} = init ?? {};
+  const res = await fetch( url, {
+    ...rest,
+    headers: json !== undefined ? {'Content-Type': 'application/json', ...rest.headers} : rest.headers,
+    body: json !== undefined ? JSON.stringify( json ) : rest.body,
+  } );
+  let data: any = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* empty body */
+  }
+  if ( !res.ok || data?.success === false ) {
+    throw new Error( data?.error || `Request failed (${res.status})` );
+  }
+  return data as T;
+}
+
+const nowLabel = () => new Date().toLocaleTimeString( [], {hour: '2-digit', minute: '2-digit'} );
+const renumber = ( list: Student[] ) => list.map( ( s, i ) => ( {...s, sNo: i + 1} ) );
+const newStudentId = ( classId: string ) => `s_${classId}_${Date.now()}_${Math.random().toString( 36 ).slice( 2, 6 )}`;
+
+function makeStudent ( classId: string, sNo: number, rollNo: string, name: string ): Student {
+  return {
+    id: newStudentId( classId ),
+    sNo,
+    rollNo,
+    name,
+    attendanceDays: DEFAULT_ATTENDANCE_DAYS,
+    totalWorkingDays: DEFAULT_WORKING_DAYS,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Small presentational components                                     */
+/* ------------------------------------------------------------------ */
+
+function Toast ( {toast}: {toast: ToastState;} ) {
+  if ( !toast ) return null;
+  const ok = toast.type === 'success';
+  return (
+    <div
+      role="status"
+      className={`fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-bold border animate-in slide-in-from-bottom duration-200 ${ok ? 'bg-slate-900 text-white border-emerald-500' : 'bg-rose-950 text-white border-rose-500'
+        }`}
+    >
+      {ok ? (
+        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+      ) : (
+        <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+      )}
+      <span>{toast.message}</span>
+    </div>
+  );
+}
+
+function LoadingScreen ( {quoteIndex}: {quoteIndex: number;} ) {
+  return (
+    <div className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden bg-slate-950 text-white px-6">
+      <div className="pointer-events-none absolute -top-24 -left-24 w-80 h-80 rounded-full bg-amber-500/20 blur-3xl animate-pulse" />
+      <div
+        className="pointer-events-none absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-indigo-500/20 blur-3xl animate-pulse"
+        style={{animationDelay: '0.6s'}}
+      />
+      <div className="relative flex flex-col items-center gap-5">
+        <div className="relative w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-2xl shadow-amber-500/30">
+          <GraduationCap className="w-10 h-10 text-slate-950" />
+          <span className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-full bg-slate-900 border-2 border-slate-950 flex items-center justify-center">
+            <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+          </span>
+        </div>
+
+        <div className="text-center">
+          <h1 className="text-lg font-black tracking-tight">GradeDesk</h1>
+          <p className="text-xs text-slate-400 font-medium mt-0.5 flex items-center justify-center gap-1.5">
+            <Database className="w-3.5 h-3.5 text-emerald-400" />
+            Connecting to Database…
+          </p>
+        </div>
+
+        <div className="w-56 h-1 rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 animate-[loaderbar_1.4s_ease-in-out_infinite]" />
+        </div>
+
+        <div className="min-h-[3.5rem] max-w-sm flex items-center justify-center px-2">
+          <p
+            key={quoteIndex}
+            lang="hi"
+            className="text-center text-sm sm:text-base font-semibold text-amber-100/90 leading-relaxed animate-in fade-in slide-in-from-bottom-1 duration-700"
+          >
+            {HINDI_POSITIVE_THOUGHTS[quoteIndex]}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5" aria-hidden>
+          {HINDI_POSITIVE_THOUGHTS.map( ( _, idx ) => (
+            <span
+              key={idx}
+              className={`h-1.5 rounded-full transition-all duration-500 ${idx === quoteIndex ? 'w-4 bg-amber-400' : 'w-1.5 bg-white/20'}`}
+            />
+          ) )}
+        </div>
+      </div>
+
+      <style>{`@keyframes loaderbar {0%{transform:translateX(-100%)}50%{transform:translateX(120%)}100%{transform:translateX(-100%)}}`}</style>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* App                                                                 */
+/* ------------------------------------------------------------------ */
+
 export default function App () {
-  // Pure Cloud State - NO data stored on local machines, no sample/demo data ever
+  /* ---------- core cloud state ---------- */
   const [classes, setClasses] = useState<ClassData[]>( [] );
-  const [activeClassId, setActiveClassId] = useState<string>( '' );
+  const [activeClassId, setActiveClassId] = useState( '' );
   const [schoolConfig, setSchoolConfig] = useState<SchoolConfig>( EMPTY_SCHOOL_CONFIG );
   const [gradingRules, setGradingRules] = useState<GradingRule[]>( [] );
 
-  // Initial cloud load state
   const [isInitialLoading, setIsInitialLoading] = useState( true );
   const [initialLoadError, setInitialLoadError] = useState<string | null>( null );
-  const [loaderQuoteIndex, setLoaderQuoteIndex] = useState<number>(
-    () => Math.floor( Math.random() * HINDI_POSITIVE_THOUGHTS.length )
-  );
+  const [loaderQuoteIndex, setLoaderQuoteIndex] = useState( () => Math.floor( Math.random() * HINDI_POSITIVE_THOUGHTS.length ) );
 
-  // Modals & Navigation state
+  /* ---------- UI state ---------- */
+  const [activeTab, setActiveTab] = useState<TabId>( 'quarterly' );
   const [isMobileNavOpen, setIsMobileNavOpen] = useState( false );
   const [isClassModalOpen, setIsClassModalOpen] = useState( false );
   const [isRapidEntryOpen, setIsRapidEntryOpen] = useState( false );
@@ -100,507 +243,521 @@ export default function App () {
   const [isSettingsOpen, setIsSettingsOpen] = useState( false );
   const [isStorageModalOpen, setIsStorageModalOpen] = useState( false );
   const [isValidationModalOpen, setIsValidationModalOpen] = useState( false );
-  const [storageDefaultTab] = useState<'local' | 'mongodb'>( 'mongodb' );
 
-  // MongoDB Cloud Sync State
+  /* ---------- sync state ---------- */
   const [isMongoConnected, setIsMongoConnected] = useState( false );
   const [isSaving, setIsSaving] = useState( false );
   const [isRefreshing, setIsRefreshing] = useState( false );
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState( false );
   const [lastSavedTime, setLastSavedTime] = useState<string | null>( null );
-  const [syncToast, setSyncToast] = useState<{type: 'success' | 'error'; message: string;} | null>( null );
+  const [toast, setToast] = useState<ToastState>( null );
 
-  const showToast = ( type: 'success' | 'error', message: string ) => {
-    setSyncToast( {type, message} );
-    setTimeout( () => {
-      setSyncToast( null );
-    }, 4500 );
-  };
+  /* ---------- refs (avoid stale closures in timers/listeners) ---------- */
+  const pendingMarksRef = useRef<Map<string, PendingMark>>( new Map() );
+  /** Classes whose students/subjects/name changed and need a full save. */
+  const dirtyClassIdsRef = useRef<Set<string>>( new Set() );
+  const classesRef = useRef( classes );
+  const schoolConfigRef = useRef( schoolConfig );
+  const busyRef = useRef( false );
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  classesRef.current = classes;
+  schoolConfigRef.current = schoolConfig;
 
-  // Active view tab: 'quarterly' | 'half_yearly' | 'comparative' | 'analytics'
-  const [activeTab, setActiveTab] = useState<'quarterly' | 'half_yearly' | 'comparative' | 'analytics'>( 'quarterly' );
+  const showToast = useCallback( ( type: 'success' | 'error', message: string ) => {
+    clearTimeout( toastTimerRef.current );
+    setToast( {type, message} );
+    toastTimerRef.current = setTimeout( () => setToast( null ), TOAST_DURATION_MS );
+  }, [] );
+  useEffect( () => () => clearTimeout( toastTimerRef.current ), [] );
 
-  // SAVE TO MONGODB ACTION
-  const handleSaveToMongoDB = async () => {
+  const markSaved = useCallback( () => {
+    setIsMongoConnected( true );
+    setHasUnsavedChanges( false );
+    setLastSavedTime( nowLabel() );
+  }, [] );
+
+  /* ------------------------------------------------------------------ */
+  /* Save / Refresh                                                      */
+  /* ------------------------------------------------------------------ */
+
+  const handleSaveToMongoDB = useCallback( async () => {
+    if ( busyRef.current ) return;
+    busyRef.current = true;
     setIsSaving( true );
     try {
-      const res = await fetch( '/api/mongodb/sync', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify( {classes, schoolConfig, gradingRules} ),
-      } );
-      const data = await res.json();
-      if ( data.success ) {
-        setIsMongoConnected( true );
-        setHasUnsavedChanges( false );
-        const timeStr = new Date().toLocaleTimeString( [], {hour: '2-digit', minute: '2-digit'} );
-        setLastSavedTime( timeStr );
-        showToast( 'success', `Saved ${classes.length} class${classes.length === 1 ? '' : 'es'} directly to MongoDB Atlas (${timeStr})` );
-      } else {
-        showToast( 'error', data.error || 'Failed to save to MongoDB' );
+      // 1) Structural changes (students, subjects, class names, new classes).
+      //    NOTE: adjust this endpoint to match your server. The original code
+      //    never persisted these, so they were silently lost on refresh.
+      for ( const id of Array.from( dirtyClassIdsRef.current ) ) {
+        const cls = classesRef.current.find( ( c ) => c.id === id );
+        if ( cls ) {
+          await api( `/api/mongodb/classes/${id}`, {method: 'PUT', json: cls} );
+        }
+        dirtyClassIdsRef.current.delete( id );
       }
+
+      // 2) Marks: group pending edits by class + term, one PATCH each.
+      const groups = new Map<string, {classId: string; term: Term; marks: Omit<PendingMark, 'classId' | 'term'>[];}>();
+      for ( const {classId, term, studentId, subjectId, mark} of pendingMarksRef.current.values() ) {
+        const key = `${classId}_${term}`;
+        if ( !groups.has( key ) ) groups.set( key, {classId, term, marks: []} );
+        groups.get( key )!.marks.push( {studentId, subjectId, mark} );
+      }
+      for ( const g of groups.values() ) {
+        await api( `/api/mongodb/classes/${g.classId}/marks`, {method: 'PATCH', json: {term: g.term, marks: g.marks}} );
+      }
+      pendingMarksRef.current.clear();
+
+      // 3) School config.
+      await api( '/api/mongodb/school-config', {method: 'PATCH', json: schoolConfigRef.current} );
+
+      markSaved();
+      showToast( 'success', `Saved to MongoDB Atlas (${nowLabel()})` );
     } catch ( err: any ) {
-      showToast( 'error', err.message || 'Network error saving to MongoDB' );
+      showToast( 'error', err?.message || 'Network error while saving to MongoDB' );
     } finally {
+      busyRef.current = false;
       setIsSaving( false );
     }
-  };
+  }, [markSaved, showToast] );
 
-  // REFRESH FROM MONGODB ACTION (no seeding — MongoDB is always the source of truth)
-  const handleRefreshFromMongoDB = async () => {
+  const handleRefreshFromMongoDB = useCallback( async () => {
+    if ( busyRef.current ) return;
+    if (
+      ( dirtyClassIdsRef.current.size > 0 || pendingMarksRef.current.size > 0 ) &&
+      !confirm( 'You have unsaved changes. Refreshing will discard them. Continue?' )
+    ) {
+      return;
+    }
+    busyRef.current = true;
     setIsRefreshing( true );
     try {
-      const res = await fetch( '/api/mongodb/pull' );
-      const data = await res.json();
-      if ( data.success ) {
-        const pulledClasses: ClassData[] = Array.isArray( data.classes ) ? data.classes : [];
-        setClasses( pulledClasses );
-        if ( data.schoolConfig ) {
-          setSchoolConfig( data.schoolConfig );
-        }
-        if ( Array.isArray( data.gradingRules ) ) {
-          setGradingRules( data.gradingRules );
-        }
-        if ( pulledClasses.length > 0 && !pulledClasses.some( ( c ) => c.id === activeClassId ) ) {
-          setActiveClassId( pulledClasses[0].id );
-        }
-        setIsMongoConnected( true );
-        setHasUnsavedChanges( false );
-        const timeStr = new Date().toLocaleTimeString( [], {hour: '2-digit', minute: '2-digit'} );
-        setLastSavedTime( timeStr );
-        showToast(
-          'success',
-          pulledClasses.length > 0
-            ? `Refreshed ${pulledClasses.length} class${pulledClasses.length === 1 ? '' : 'es'} from MongoDB Atlas`
-            : 'Connected to MongoDB Atlas — no classes saved there yet'
-        );
-      } else {
-        showToast( 'error', data.error || 'Could not fetch data from Database' );
-      }
+      const data = await api( '/api/mongodb/pull' );
+      const pulled: ClassData[] = Array.isArray( data.classes ) ? data.classes : [];
+      setClasses( pulled );
+      if ( data.schoolConfig ) setSchoolConfig( data.schoolConfig );
+      if ( Array.isArray( data.gradingRules ) ) setGradingRules( data.gradingRules );
+      setActiveClassId( ( prev ) => ( pulled.some( ( c ) => c.id === prev ) ? prev : pulled[0]?.id ?? '' ) );
+      pendingMarksRef.current.clear();
+      dirtyClassIdsRef.current.clear();
+      setInitialLoadError( null );
+      markSaved();
+      showToast(
+        'success',
+        pulled.length > 0
+          ? `Refreshed ${pulled.length} class${pulled.length === 1 ? '' : 'es'} from MongoDB Atlas`
+          : 'Connected to MongoDB Atlas — no classes saved there yet'
+      );
     } catch ( err: any ) {
-      showToast( 'error', err.message || 'Network error connecting to Database' );
+      showToast( 'error', err?.message || 'Network error connecting to Database' );
     } finally {
+      busyRef.current = false;
       setIsRefreshing( false );
     }
-  };
+  }, [markSaved, showToast] );
 
-  // Initial load directly from MongoDB (No localStorage used, no seeded/sample data!)
+  /* ------------------------------------------------------------------ */
+  /* Effects                                                             */
+  /* ------------------------------------------------------------------ */
+
+  // Initial load (cloud only — nothing is invented locally).
   useEffect( () => {
-    // Guarantee 100% cloud-only MongoDB operation — never read/write browser storage.
-    try {
-      localStorage.clear();
-    } catch ( e ) {}
-
     let cancelled = false;
-
-    const loadFromMongo = async () => {
-      setIsInitialLoading( true );
-      setInitialLoadError( null );
+    ( async () => {
       try {
-        // Check MongoDB connection status
-        const statusRes = await fetch( '/api/mongodb/status' );
-        const statusData = await statusRes.json();
-        if ( !cancelled ) setIsMongoConnected( Boolean( statusData?.connected ) );
-
-        // Pull whatever actually exists in MongoDB — nothing is invented locally.
-        const pullRes = await fetch( '/api/mongodb/pull' );
-        const pullData = await pullRes.json();
-
+        const [status, pull] = await Promise.all( [
+          api( '/api/mongodb/status' ).catch( () => null ),
+          api( '/api/mongodb/pull' ),
+        ] );
         if ( cancelled ) return;
-
-        if ( pullData?.success ) {
-          const pulledClasses: ClassData[] = Array.isArray( pullData.classes ) ? pullData.classes : [];
-          setClasses( pulledClasses );
-          if ( pullData.schoolConfig ) {
-            setSchoolConfig( pullData.schoolConfig );
-          }
-          if ( Array.isArray( pullData.gradingRules ) ) {
-            setGradingRules( pullData.gradingRules );
-          }
-          if ( pulledClasses.length > 0 ) {
-            setActiveClassId( pulledClasses[0].id );
-            const timeStr = new Date().toLocaleTimeString( [], {hour: '2-digit', minute: '2-digit'} );
-            setLastSavedTime( timeStr );
-          }
-          // If MongoDB genuinely has no classes yet, we leave `classes` as []
-          // and show the "no data yet" onboarding screen below — no seeding.
-        } else {
-          setInitialLoadError( pullData?.error || 'Could not load data from Database' );
+        setIsMongoConnected( Boolean( status?.connected ) );
+        const pulled: ClassData[] = Array.isArray( pull.classes ) ? pull.classes : [];
+        setClasses( pulled );
+        if ( pull.schoolConfig ) setSchoolConfig( pull.schoolConfig );
+        if ( Array.isArray( pull.gradingRules ) ) setGradingRules( pull.gradingRules );
+        if ( pulled.length > 0 ) {
+          setActiveClassId( pulled[0].id );
+          setLastSavedTime( nowLabel() );
         }
       } catch ( err: any ) {
         if ( !cancelled ) setInitialLoadError( err?.message || 'Network error connecting to Database' );
       } finally {
         if ( !cancelled ) setIsInitialLoading( false );
       }
-    };
-
-    loadFromMongo();
+    } )();
     return () => {
       cancelled = true;
     };
   }, [] );
 
-  // Cycle through a random positive Hindi thought every few seconds while
-  // the initial MongoDB connection is loading — never repeats the same one
-  // twice in a row.
+  // Rotate the Hindi thought while loading (never the same twice in a row).
   useEffect( () => {
     if ( !isInitialLoading ) return;
-    const interval = setInterval( () => {
+    const id = setInterval( () => {
       setLoaderQuoteIndex( ( prev ) => {
         if ( HINDI_POSITIVE_THOUGHTS.length <= 1 ) return prev;
         let next = prev;
-        while ( next === prev ) {
-          next = Math.floor( Math.random() * HINDI_POSITIVE_THOUGHTS.length );
-        }
+        while ( next === prev ) next = Math.floor( Math.random() * HINDI_POSITIVE_THOUGHTS.length );
         return next;
       } );
     }, 3200 );
-    return () => clearInterval( interval );
+    return () => clearInterval( id );
   }, [isInitialLoading] );
 
-  // Keyboard shortcut: Ctrl+S or Cmd+S to save to MongoDB
+  // Multi-user background poll: merge other teachers' marks, keep my unsaved work.
   useEffect( () => {
-    const handleKeyDown = ( e: KeyboardEvent ) => {
+    const id = setInterval( async () => {
+      if ( busyRef.current || document.hidden ) return;
+      try {
+        const data = await api( '/api/mongodb/pull' );
+        if ( !Array.isArray( data.classes ) || data.classes.length === 0 ) return;
+        const remoteClasses: ClassData[] = data.classes;
+
+        setClasses( ( prev ) => {
+          const merged = remoteClasses.map( ( remote ) => {
+            const local = prev.find( ( c ) => c.id === remote.id );
+            if ( !local ) return remote;
+
+            const structuralDirty = dirtyClassIdsRef.current.has( remote.id );
+            const overlay = ( base: MarksMap | undefined, term: Term ): MarksMap => {
+              const out: MarksMap = {};
+              for ( const [sid, row] of Object.entries( base || {} ) ) out[sid] = {...row};
+              for ( const p of pendingMarksRef.current.values() ) {
+                if ( p.classId === remote.id && p.term === term ) {
+                  ( out[p.studentId] ||= {} )[p.subjectId] = p.mark;
+                }
+              }
+              return out;
+            };
+
+            return structuralDirty
+              ? {
+                ...local,
+                quarterlyMarks: overlay( remote.quarterlyMarks, 'quarterly' ),
+                halfYearlyMarks: overlay( remote.halfYearlyMarks, 'halfYearly' ),
+              }
+              : {
+                ...remote,
+                quarterlyMarks: overlay( remote.quarterlyMarks, 'quarterly' ),
+                halfYearlyMarks: overlay( remote.halfYearlyMarks, 'halfYearly' ),
+              };
+          } );
+          // Keep classes created locally that aren't saved yet.
+          const localOnly = prev.filter( ( c ) => dirtyClassIdsRef.current.has( c.id ) && !remoteClasses.some( ( r ) => r.id === c.id ) );
+          return [...merged, ...localOnly];
+        } );
+        if ( data.schoolConfig ) setSchoolConfig( ( prev ) => ( {...prev, ...data.schoolConfig} ) );
+        setIsMongoConnected( true );
+      } catch {
+        /* silent: next tick will retry */
+      }
+    }, POLL_INTERVAL_MS );
+    return () => clearInterval( id );
+  }, [] );
+
+  // Ctrl/Cmd+S to save.
+  useEffect( () => {
+    const onKey = ( e: KeyboardEvent ) => {
       if ( ( e.ctrlKey || e.metaKey ) && e.key.toLowerCase() === 's' ) {
         e.preventDefault();
-        if ( classes.length > 0 ) {
-          handleSaveToMongoDB();
-        }
+        if ( classesRef.current.length > 0 ) handleSaveToMongoDB();
       }
     };
-    window.addEventListener( 'keydown', handleKeyDown );
-    return () => window.removeEventListener( 'keydown', handleKeyDown );
-  }, [classes, schoolConfig, gradingRules] );
+    window.addEventListener( 'keydown', onKey );
+    return () => window.removeEventListener( 'keydown', onKey );
+  }, [handleSaveToMongoDB] );
 
-  // Current active class reference — may legitimately be undefined until the
-  // first class exists in MongoDB.
+  // Warn before closing the tab with unsaved work.
+  useEffect( () => {
+    if ( !hasUnsavedChanges ) return;
+    const onBeforeUnload = ( e: BeforeUnloadEvent ) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener( 'beforeunload', onBeforeUnload );
+    return () => window.removeEventListener( 'beforeunload', onBeforeUnload );
+  }, [hasUnsavedChanges] );
+
+  /* ------------------------------------------------------------------ */
+  /* Derived data                                                        */
+  /* ------------------------------------------------------------------ */
+
   const currentClass = classes.find( ( c ) => c.id === activeClassId ) || classes[0];
+  const currentStudents = useMemo( () => currentClass?.students ?? [], [currentClass] );
+  const currentSubjects = useMemo( () => currentClass?.subjects ?? [], [currentClass] );
+  const currentQuarterlyMarks = useMemo( () => currentClass?.quarterlyMarks || {}, [currentClass] );
+  const currentHalfYearlyMarks = useMemo( () => currentClass?.halfYearlyMarks || {}, [currentClass] );
 
-  // ---- Everything below this point assumes a real, loaded currentClass ----
-  // (guarded by the early-return render states further down)
+  const quarterlyResults = useMemo(
+    () => computeStudentResults( currentStudents, currentSubjects, currentQuarterlyMarks, gradingRules ),
+    [currentStudents, currentSubjects, currentQuarterlyMarks, gradingRules]
+  );
+  const halfYearlyResults = useMemo(
+    () => computeStudentResults( currentStudents, currentSubjects, currentHalfYearlyMarks, gradingRules ),
+    [currentStudents, currentSubjects, currentHalfYearlyMarks, gradingRules]
+  );
+  const comparativeResults = useMemo(
+    () => computeComparativeResults( currentStudents, currentSubjects, currentQuarterlyMarks, currentHalfYearlyMarks, gradingRules ),
+    [currentStudents, currentSubjects, currentQuarterlyMarks, currentHalfYearlyMarks, gradingRules]
+  );
 
-  const currentStudents = currentClass ? currentClass.students : [];
-  const currentSubjects = currentClass ? currentClass.subjects : [];
-  const currentQuarterlyMarks = currentClass ? currentClass.quarterlyMarks || {} : {};
-  const currentHalfYearlyMarks = currentClass ? currentClass.halfYearlyMarks || {} : {};
-
-  // Calculations for current active class
-  const quarterlyResults = computeStudentResults( currentStudents, currentSubjects, currentQuarterlyMarks, gradingRules );
-  const halfYearlyResults = computeStudentResults( currentStudents, currentSubjects, currentHalfYearlyMarks, gradingRules );
-  const comparativeResults = computeComparativeResults( currentStudents, currentSubjects, currentQuarterlyMarks, currentHalfYearlyMarks, gradingRules );
-
-  const isQuarterly = activeTab === 'quarterly';
+  const isQuarterly = activeTab !== 'half_yearly';
+  const term: Term = isQuarterly ? 'quarterly' : 'halfYearly';
   const currentMarks = isQuarterly ? currentQuarterlyMarks : currentHalfYearlyMarks;
   const currentResults = isQuarterly ? quarterlyResults : halfYearlyResults;
   const currentExamTitle = isQuarterly ? schoolConfig.quarterlyTitle : schoolConfig.halfYearlyTitle;
 
-  // Active class school config with dynamic class & section
-  const activeClassConfig: SchoolConfig = {
-    ...schoolConfig,
-    className: currentClass ? currentClass.name : schoolConfig.className,
-    section: currentClass ? currentClass.section : schoolConfig.section,
-    academicYear: ( currentClass && currentClass.academicYear ) || schoolConfig.academicYear,
-  };
-
-  // Live real-time data validation diagnostics
-  const validationReport = React.useMemo(
-    () => ( currentClass ? validateClassData( currentClass ) : null ),
-    [currentClass]
+  const activeClassConfig: SchoolConfig = useMemo(
+    () => ( {
+      ...schoolConfig,
+      className: currentClass ? currentClass.name : schoolConfig.className,
+      section: currentClass ? currentClass.section : schoolConfig.section,
+      academicYear: currentClass?.academicYear || schoolConfig.academicYear,
+    } ),
+    [schoolConfig, currentClass]
   );
 
-  // Helper to update current class in classes array
-  const updateCurrentClass = ( updater: ( prev: ClassData ) => ClassData ) => {
+  const validationReport = useMemo( () => ( currentClass ? validateClassData( currentClass ) : null ), [currentClass] );
+  const selectedResult = currentResults.find( ( r ) => r.student.id === selectedStudentForCard );
+
+  /* ------------------------------------------------------------------ */
+  /* Mutations                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /** `structural` = changes beyond marks (students, subjects, names). */
+  const updateCurrentClass = ( updater: ( prev: ClassData ) => ClassData, structural = true ) => {
     if ( !currentClass ) return;
+    const id = currentClass.id;
+    if ( structural ) dirtyClassIdsRef.current.add( id );
     setHasUnsavedChanges( true );
-    setClasses( ( prevList ) =>
-      prevList.map( ( cls ) => ( cls.id === currentClass.id ? updater( cls ) : cls ) )
-    );
+    setClasses( ( list ) => list.map( ( c ) => ( c.id === id ? updater( c ) : c ) ) );
   };
 
-  // Handlers for mark updates
-  const handleUpdateMark = ( studentId: string, subjectId: string, mark: number | null ) => {
-    updateCurrentClass( ( prev ) => {
-      const marksField = isQuarterly ? 'quarterlyMarks' : 'halfYearlyMarks';
-      const existingTermMarks = prev[marksField] || {};
-      const existingStudentMarks = existingTermMarks[studentId] || {};
+  const queueMark = ( p: PendingMark ) =>
+    pendingMarksRef.current.set( `${p.classId}_${p.term}_${p.studentId}_${p.subjectId}`, p );
 
+  const purgePending = ( predicate: ( p: PendingMark ) => boolean ) => {
+    for ( const [key, p] of pendingMarksRef.current ) if ( predicate( p ) ) pendingMarksRef.current.delete( key );
+  };
+
+  const handleUpdateMark = ( studentId: string, subjectId: string, mark: number | null ) => {
+    if ( !currentClass ) return;
+    const field = isQuarterly ? 'quarterlyMarks' : 'halfYearlyMarks';
+    const item: PendingMark = {classId: currentClass.id, term, studentId, subjectId, mark};
+
+    updateCurrentClass( ( prev ) => {
+      const termMarks = prev[field] || {};
+      return {...prev, [field]: {...termMarks, [studentId]: {...( termMarks[studentId] || {} ), [subjectId]: mark}}};
+    }, false );
+
+    queueMark( item );
+
+    // Immediate targeted PATCH; only drop from the pending queue if it succeeds
+    // and the cell hasn't been edited again in the meantime.
+    const key = `${item.classId}_${term}_${studentId}_${subjectId}`;
+    api( `/api/mongodb/classes/${item.classId}/students/${studentId}/subjects/${subjectId}/mark`, {
+      method: 'PATCH',
+      json: {term, mark},
+    } )
+      .then( () => {
+        if ( pendingMarksRef.current.get( key )?.mark === mark ) pendingMarksRef.current.delete( key );
+      } )
+      .catch( () => {
+        /* stays queued; the Save button will retry */
+      } );
+  };
+
+  const handleAddStudent = ( name: string, rollNo: string ) => {
+    if ( !currentClass ) return;
+    const s = makeStudent( currentClass.id, currentStudents.length + 1, rollNo, name );
+    updateCurrentClass( ( prev ) => ( {...prev, students: [...prev.students, s]} ) );
+  };
+
+  const handleInsertRowAt = ( targetIndex: number, name: string, rollNo: string ) => {
+    if ( !currentClass ) return;
+    const s = makeStudent( currentClass.id, targetIndex + 1, rollNo, name );
+    updateCurrentClass( ( prev ) => {
+      const list = [...prev.students];
+      list.splice( targetIndex, 0, s );
+      return {...prev, students: renumber( list )};
+    } );
+  };
+
+  const handleDeleteStudent = ( studentId: string ) => {
+    if ( !confirm( 'Are you sure you want to remove this student?' ) ) return;
+    purgePending( ( p ) => p.studentId === studentId );
+    updateCurrentClass( ( prev ) => {
+      const {[studentId]: _q, ...quarterlyMarks} = prev.quarterlyMarks || {};
+      const {[studentId]: _h, ...halfYearlyMarks} = prev.halfYearlyMarks || {};
       return {
         ...prev,
-        [marksField]: {
-          ...existingTermMarks,
-          [studentId]: {
-            ...existingStudentMarks,
-            [subjectId]: mark,
-          },
-        },
+        students: renumber( prev.students.filter( ( s ) => s.id !== studentId ) ),
+        quarterlyMarks,
+        halfYearlyMarks,
       };
     } );
   };
 
-  // Student management handlers
-  const handleAddStudent = ( name: string, rollNo: string ) => {
-    if ( !currentClass ) return;
-    const newId = 's_' + currentClass.id + '_' + Date.now();
-    const newStudent: Student = {
-      id: newId,
-      sNo: currentStudents.length + 1,
-      rollNo,
-      name,
-      attendanceDays: 0,
-      totalWorkingDays: 0,
-    };
-
-    updateCurrentClass( ( prev ) => ( {
-      ...prev,
-      students: [...prev.students, newStudent],
-    } ) );
-  };
-
-  const handleDeleteStudent = ( studentId: string ) => {
-    if ( confirm( 'Are you sure you want to remove this student?' ) ) {
-      updateCurrentClass( ( prev ) => {
-        const remaining = prev.students.filter( ( s ) => s.id !== studentId );
-        const renumbered = remaining.map( ( s, idx ) => ( {...s, sNo: idx + 1} ) );
-
-        const newQ = {...prev.quarterlyMarks};
-        delete newQ[studentId];
-        const newH = {...prev.halfYearlyMarks};
-        delete newH[studentId];
-
-        return {
-          ...prev,
-          students: renumbered,
-          quarterlyMarks: newQ,
-          halfYearlyMarks: newH,
-        };
-      } );
-    }
-  };
-
-  const handleUpdateStudent = ( studentId: string, name: string, rollNo: string ) => {
+  const handleUpdateStudent = ( studentId: string, name: string, rollNo: string ) =>
     updateCurrentClass( ( prev ) => ( {
       ...prev,
       students: prev.students.map( ( s ) => ( s.id === studentId ? {...s, name, rollNo} : s ) ),
     } ) );
-  };
 
-  // Row Shifting: Move student up
-  const handleMoveRowUp = ( index: number ) => {
-    if ( index <= 0 || index >= currentStudents.length ) return;
-    updateCurrentClass( ( prev ) => {
-      const newStudents = [...prev.students];
-      const temp = newStudents[index];
-      newStudents[index] = newStudents[index - 1];
-      newStudents[index - 1] = temp;
-      const renumbered = newStudents.map( ( s, idx ) => ( {...s, sNo: idx + 1} ) );
-      return {...prev, students: renumbered};
-    } );
-  };
-
-  // Row Shifting: Move student down
-  const handleMoveRowDown = ( index: number ) => {
-    if ( index < 0 || index >= currentStudents.length - 1 ) return;
-    updateCurrentClass( ( prev ) => {
-      const newStudents = [...prev.students];
-      const temp = newStudents[index];
-      newStudents[index] = newStudents[index + 1];
-      newStudents[index + 1] = temp;
-      const renumbered = newStudents.map( ( s, idx ) => ( {...s, sNo: idx + 1} ) );
-      return {...prev, students: renumbered};
-    } );
-  };
-
-  // Reorder all students (e.g. from sorting)
-  const handleReorderStudents = ( newStudents: Student[] ) => {
-    updateCurrentClass( ( prev ) => ( {
-      ...prev,
-      students: newStudents,
-    } ) );
-  };
-
-  // Insert row at specific position
-  const handleInsertRowAt = ( targetIndex: number, name: string, rollNo: string ) => {
-    if ( !currentClass ) return;
-    const newId = 's_' + currentClass.id + '_' + Date.now();
-    const newStudent: Student = {
-      id: newId,
-      sNo: targetIndex + 1,
-      rollNo,
-      name,
-      attendanceDays: 0,
-      totalWorkingDays: 0,
-    };
-
+  const swapRows = ( a: number, b: number ) =>
     updateCurrentClass( ( prev ) => {
       const list = [...prev.students];
-      list.splice( targetIndex, 0, newStudent );
-      const renumbered = list.map( ( s, idx ) => ( {...s, sNo: idx + 1} ) );
-      return {...prev, students: renumbered};
+      [list[a], list[b]] = [list[b], list[a]];
+      return {...prev, students: renumber( list )};
     } );
+
+  const handleMoveRowUp = ( i: number ) => {
+    if ( i > 0 && i < currentStudents.length ) swapRows( i, i - 1 );
+  };
+  const handleMoveRowDown = ( i: number ) => {
+    if ( i >= 0 && i < currentStudents.length - 1 ) swapRows( i, i + 1 );
+  };
+  const handleReorderStudents = ( students: Student[] ) => updateCurrentClass( ( prev ) => ( {...prev, students} ) );
+
+  const handleFillSampleMarks = () => {
+    if ( !currentClass ) return;
+    if ( !confirm( 'This fills DEMO marks and will overwrite existing marks for this exam. Continue?' ) ) return;
+
+    const field = isQuarterly ? 'quarterlyMarks' : 'halfYearlyMarks';
+    const generated: MarksMap = {};
+    currentClass.students.forEach( ( student, idx ) => {
+      generated[student.id] = {};
+      currentClass.subjects.forEach( ( subj ) => {
+        const base = isQuarterly ? 0.58 + ( ( idx * 9 ) % 36 ) / 100 : 0.65 + ( ( idx * 9 ) % 32 ) / 100;
+        const ratio = Math.max( 0.35, Math.min( 0.98, base + ( idx % 3 === 0 ? 0.08 : -0.04 ) ) );
+        const mark = Math.round( subj.maxMarks * ratio );
+        generated[student.id][subj.id] = mark;
+        // Queue so these actually get saved (previously they were lost).
+        queueMark( {classId: currentClass.id, term, studentId: student.id, subjectId: subj.id, mark} );
+      } );
+    } );
+    updateCurrentClass( ( prev ) => ( {...prev, [field]: generated} ), false );
   };
 
-  // Clear marks for current class
-  const handleClearMarks = () => {
+  const handleClearMarks = async () => {
     if ( !currentClass ) return;
-    if ( confirm( `Clear all marks entered for ${currentClass.name} (${currentClass.section}) in ${currentExamTitle}? This cannot be undone.` ) ) {
-      updateCurrentClass( ( prev ) =>
-        isQuarterly ? {...prev, quarterlyMarks: {}} : {...prev, halfYearlyMarks: {}}
-      );
+    if ( !confirm( `Clear all marks entered for ${currentClass.name} (${currentClass.section}) in ${currentExamTitle}? This cannot be undone.` ) ) return;
+
+    const classId = currentClass.id;
+    purgePending( ( p ) => p.classId === classId && p.term === term );
+    updateCurrentClass( ( prev ) => ( isQuarterly ? {...prev, quarterlyMarks: {}} : {...prev, halfYearlyMarks: {}} ), false );
+    try {
+      await api( '/api/mongodb/clear-marks', {method: 'PATCH', json: {classId, term}} );
+      showToast( 'success', `Cleared ${currentExamTitle} marks for ${currentClass.name}` );
+    } catch ( err: any ) {
+      showToast( 'error', err?.message || 'Marks cleared locally, but the server could not be updated' );
     }
   };
 
-  // Import handler for active class
   const handleImportPastedData = ( imported: {rollNo: string; name: string; marks: Record<string, number>;}[] ) => {
-    const updatedStudents: Student[] = [];
-    const newMarks: Record<string, Record<string, number | null>> = {};
-
-    imported.forEach( ( item, index ) => {
-      const id = 's_imp_' + index + '_' + Date.now();
-      updatedStudents.push( {
+    if ( !currentClass ) return;
+    const stamp = Date.now();
+    const students: Student[] = [];
+    const marks: MarksMap = {};
+    imported.forEach( ( item, i ) => {
+      const id = `s_imp_${stamp}_${i}`;
+      students.push( {
         id,
-        sNo: index + 1,
-        rollNo: item.rollNo || String( index + 101 ),
+        sNo: i + 1,
+        rollNo: item.rollNo || String( i + 101 ),
         name: item.name,
-        attendanceDays: 0,
-        totalWorkingDays: 0,
+        attendanceDays: DEFAULT_ATTENDANCE_DAYS,
+        totalWorkingDays: DEFAULT_WORKING_DAYS,
       } );
-
-      newMarks[id] = item.marks;
+      marks[id] = item.marks;
     } );
-
+    purgePending( ( p ) => p.classId === currentClass.id && p.term === term );
     updateCurrentClass( ( prev ) => ( {
       ...prev,
-      students: updatedStudents,
-      ...( isQuarterly ? {quarterlyMarks: newMarks} : {halfYearlyMarks: newMarks} ),
+      students,
+      ...( isQuarterly ? {quarterlyMarks: marks} : {halfYearlyMarks: marks} ),
     } ) );
   };
 
-  // Class Management Handlers
+  /* ---------- class management ---------- */
+
   const handleCreateClass = ( newClass: ClassData ) => {
+    dirtyClassIdsRef.current.add( newClass.id );
     setHasUnsavedChanges( true );
     setClasses( ( prev ) => [...prev, newClass] );
     setActiveClassId( newClass.id );
   };
 
   const handleUpdateClass = ( classId: string, name: string, section: string ) => {
+    dirtyClassIdsRef.current.add( classId );
     setHasUnsavedChanges( true );
-    setClasses( ( prev ) =>
-      prev.map( ( c ) => ( c.id === classId ? {...c, name, section} : c ) )
-    );
+    setClasses( ( prev ) => prev.map( ( c ) => ( c.id === classId ? {...c, name, section} : c ) ) );
   };
 
-  const handleDeleteClass = ( classId: string ) => {
+  const handleDeleteClass = async ( classId: string ) => {
     if ( classes.length <= 1 ) {
       alert( 'You cannot delete the only remaining class.' );
       return;
     }
-    setHasUnsavedChanges( true );
     const remaining = classes.filter( ( c ) => c.id !== classId );
+    dirtyClassIdsRef.current.delete( classId );
+    purgePending( ( p ) => p.classId === classId );
     setClasses( remaining );
-    if ( activeClassId === classId ) {
-      setActiveClassId( remaining[0].id );
+    if ( activeClassId === classId ) setActiveClassId( remaining[0].id );
+    try {
+      await api( `/api/mongodb/class/${classId}`, {method: 'DELETE'} );
+      showToast( 'success', 'Class deleted' );
+    } catch ( err: any ) {
+      showToast( 'error', err?.message || 'Class removed locally, but the server could not delete it' );
     }
   };
 
   const handleDuplicateClass = ( classId: string ) => {
     const target = classes.find( ( c ) => c.id === classId );
     if ( !target ) return;
-
-    setHasUnsavedChanges( true );
-    const nextSectionChar = String.fromCharCode( target.section.charCodeAt( 0 ) + 1 );
-    const newId = 'class_' + Date.now();
-
-    const duplicatedClass: ClassData = {
+    const newId = `class_${Date.now()}`;
+    const nextChar = String.fromCharCode( target.section.charCodeAt( 0 ) + 1 );
+    const copy: ClassData = {
       ...target,
       id: newId,
-      section: nextSectionChar.length === 1 ? nextSectionChar : `${target.section}-Copy`,
-      students: target.students.map( ( s, idx ) => ( {
-        ...s,
-        id: `s_${newId}_${idx + 1}`,
-      } ) ),
+      section: /^[A-Za-z]$/.test( target.section ) ? nextChar : `${target.section}-Copy`,
+      students: target.students.map( ( s, i ) => ( {...s, id: `s_${newId}_${i + 1}`} ) ),
       quarterlyMarks: {},
       halfYearlyMarks: {},
     };
-
-    setClasses( ( prev ) => [...prev, duplicatedClass] );
-    setActiveClassId( newId );
+    handleCreateClass( copy );
   };
 
-  // Selected student result for individual report card
-  const selectedResult = currentResults.find( ( r ) => r.student.id === selectedStudentForCard );
+  const handleUpdateSchoolConfig = ( cfg: SchoolConfig, alsoRenameClass: boolean ) => {
+    setHasUnsavedChanges( true );
+    setSchoolConfig( cfg );
+    if ( alsoRenameClass ) updateCurrentClass( ( prev ) => ( {...prev, name: cfg.className, section: cfg.section} ) );
+  };
 
-  // ---------------------------------------------------------------------
-  // RENDER: full-screen loading state while the very first MongoDB pull
-  // is in flight. Nothing is drawn from local/sample data before this
-  // resolves.
-  // ---------------------------------------------------------------------
-  if ( isInitialLoading ) {
-    return (
-      <div className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden bg-slate-950 text-white px-6">
-        {/* Soft ambient glow blobs */}
-        <div className="pointer-events-none absolute -top-24 -left-24 w-80 h-80 rounded-full bg-amber-500/20 blur-3xl animate-pulse" />
-        <div
-          className="pointer-events-none absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-indigo-500/20 blur-3xl animate-pulse"
-          style={{animationDelay: '0.6s'}}
-        />
-        <div className="pointer-events-none absolute top-1/3 right-1/4 w-56 h-56 rounded-full bg-emerald-500/10 blur-3xl animate-pulse" style={{animationDelay: '1.2s'}} />
+  /* ------------------------------------------------------------------ */
+  /* Shared modals (mounted in both the empty state and the main view)   */
+  /* ------------------------------------------------------------------ */
 
-        {/* Logo mark */}
-        <div className="relative flex flex-col items-center gap-5">
-          <div className="relative w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-2xl shadow-amber-500/30">
-            <GraduationCap className="w-10 h-10 text-slate-950" />
-            <span className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-full bg-slate-900 border-2 border-slate-950 flex items-center justify-center">
-              <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-            </span>
-          </div>
+  const classModal = (
+    <ClassModal
+      isOpen={isClassModalOpen}
+      onClose={() => setIsClassModalOpen( false )}
+      classes={classes}
+      activeClassId={activeClassId}
+      onSelectClass={setActiveClassId}
+      onCreateClass={handleCreateClass}
+      onUpdateClass={handleUpdateClass}
+      onDeleteClass={handleDeleteClass}
+      onDuplicateClass={handleDuplicateClass}
+    />
+  );
 
-          <div className="text-center">
-            <h1 className="text-lg font-black tracking-tight">GradeDesk</h1>
-            <p className="text-xs text-slate-400 font-medium mt-0.5 flex items-center justify-center gap-1.5">
-              <Database className="w-3.5 h-3.5 text-emerald-400" />
-              Connecting to Database…
-            </p>
-          </div>
+  /* ------------------------------------------------------------------ */
+  /* Early-return screens                                                */
+  /* ------------------------------------------------------------------ */
 
-          {/* Progress shimmer bar */}
-          <div className="w-56 h-1 rounded-full bg-white/10 overflow-hidden">
-            <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 animate-[loaderbar_1.4s_ease-in-out_infinite]" />
-          </div>
+  if ( isInitialLoading ) return <LoadingScreen quoteIndex={loaderQuoteIndex} />;
 
-          {/* Rotating positive Hindi thought */}
-          <div className="min-h-[3.5rem] max-w-sm flex items-center justify-center px-2">
-            <p
-              key={loaderQuoteIndex}
-              className="text-center text-sm sm:text-base font-semibold text-amber-100/90 leading-relaxed animate-in fade-in slide-in-from-bottom-1 duration-700"
-            >
-              {HINDI_POSITIVE_THOUGHTS[loaderQuoteIndex]}
-            </p>
-          </div>
-
-          {/* Dot indicators for the thought carousel */}
-          <div className="flex items-center gap-1.5">
-            {HINDI_POSITIVE_THOUGHTS.map( ( _, idx ) => (
-              <span
-                key={idx}
-                className={`h-1.5 rounded-full transition-all duration-500 ${idx === loaderQuoteIndex ? 'w-4 bg-amber-400' : 'w-1.5 bg-white/20'
-                  }`}
-              />
-            ) )}
-          </div>
-        </div>
-
-        <style>{`
-          @keyframes loaderbar {
-            0% { transform: translateX(-100%); }
-            50% { transform: translateX(120%); }
-            100% { transform: translateX(-100%); }
-          }
-        `}</style>
-      </div>
-    );
-  }
-
-  // RENDER: connection/load error — never fall back to fabricated data.
   if ( initialLoadError ) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100/70 text-slate-700 gap-3 px-4 text-center">
@@ -609,17 +766,17 @@ export default function App () {
         <p className="text-xs text-slate-500 max-w-sm">{initialLoadError}</p>
         <button
           onClick={handleRefreshFromMongoDB}
-          className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold"
+          disabled={isRefreshing}
+          className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold disabled:opacity-60"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           Try Again
         </button>
+        <Toast toast={toast} />
       </div>
     );
   }
 
-  // RENDER: MongoDB is connected but genuinely has no classes yet — a real
-  // empty state, not sample/demo data.
   if ( !currentClass ) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100/70 text-slate-700 gap-4 px-4 text-center">
@@ -629,8 +786,7 @@ export default function App () {
         <div>
           <p className="text-base font-black text-slate-900">No classes in MongoDB yet</p>
           <p className="text-xs text-slate-500 max-w-sm mt-1">
-            Nothing is pre-loaded — set up your school details, then add your first class to start
-            entering marks. Everything you create is saved straight to your MongoDB Atlas cluster.
+            Nothing is pre-loaded — set up your school details, then add your first class to start entering marks.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -658,69 +814,67 @@ export default function App () {
           {isRefreshing ? 'Checking MongoDB…' : 'Check MongoDB again'}
         </button>
 
-        {/* Modals still need to be mounted here so onboarding actually works */}
-        <ClassModal
-          isOpen={isClassModalOpen}
-          onClose={() => setIsClassModalOpen( false )}
-          classes={classes}
-          activeClassId={activeClassId}
-          onSelectClass={( id ) => setActiveClassId( id )}
-          onCreateClass={handleCreateClass}
-          onUpdateClass={handleUpdateClass}
-          onDeleteClass={handleDeleteClass}
-          onDuplicateClass={handleDuplicateClass}
-        />
+        {classModal}
         <SettingsModal
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen( false )}
           schoolConfig={schoolConfig}
-          onUpdateSchoolConfig={( cfg ) => {
-            setHasUnsavedChanges( true );
-            setSchoolConfig( cfg );
-          }}
+          onUpdateSchoolConfig={( cfg ) => handleUpdateSchoolConfig( cfg, false )}
           subjects={[]}
           onUpdateSubjects={() => {}}
         />
-
-        {syncToast && (
-          <div
-            className={`fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-bold border ${syncToast.type === 'success'
-                ? 'bg-slate-900 text-white border-emerald-500'
-                : 'bg-rose-950 text-white border-rose-500'
-              }`}
-          >
-            {syncToast.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            )}
-            <span>{syncToast.message}</span>
-          </div>
-        )}
+        <Toast toast={toast} />
       </div>
     );
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Main render                                                         */
+  /* ------------------------------------------------------------------ */
+
+  const tabCount = ( id: TabId ) => ( id === 'quarterly' ? quarterlyResults.length : id === 'half_yearly' ? halfYearlyResults.length : null );
+
+  const tabulationProps = {
+    schoolConfig: activeClassConfig,
+    subjects: currentSubjects,
+    students: currentStudents,
+    onUpdateMark: handleUpdateMark,
+    onAddStudent: handleAddStudent,
+    onDeleteStudent: handleDeleteStudent,
+    onUpdateStudent: handleUpdateStudent,
+    onOpenReportCard: ( id: string ) => setSelectedStudentForCard( id ),
+    onOpenRapidEntry: () => setIsRapidEntryOpen( true ),
+    onFillSampleMarks: handleFillSampleMarks,
+    onClearMarks: handleClearMarks,
+    onMoveRowUp: handleMoveRowUp,
+    onMoveRowDown: handleMoveRowDown,
+    onReorderStudents: handleReorderStudents,
+    onInsertRowAt: handleInsertRowAt,
+    onOpenRegisterPrint: () => setIsRegisterPrintOpen( true ),
+  };
+
+  const closeNavThen = ( fn: () => void ) => () => {
+    setIsMobileNavOpen( false );
+    fn();
+  };
+
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 pb-16">
-      {/* Offline Status Toast Indicator */}
       <OfflineIndicator />
 
-      {/* Top Navbar */}
+      {/* ---------------- Header ---------------- */}
       <header className="no-print bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14 sm:h-16 gap-2">
-            {/* Logo and school session header */}
+            {/* Brand */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shadow-md shadow-amber-500/20 shrink-0">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-md shadow-amber-500/20 shrink-0">
                 <GraduationCap className="w-5 h-5 sm:w-6 sm:h-6" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <h1 className="text-sm sm:text-base font-black tracking-tight text-slate-900 truncate">
-                    GradeDesk
-                  </h1>
-                  <span className="hidden sm:inline-flex items-center px-1.5 py-0.2 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                  <h1 className="text-sm sm:text-base font-black tracking-tight truncate">GradeDesk</h1>
+                  <span className="hidden sm:inline-flex items-center px-1.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
                     {activeClassConfig.academicYear || '—'}
                   </span>
                 </div>
@@ -728,41 +882,28 @@ export default function App () {
                   {schoolConfig.schoolName || 'Configure school name in Settings'}
                 </p>
               </div>
-
-              {/* Current active class badge on mobile/desktop */}
               <div className="hidden xs:flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-bold shrink-0">
                 <span>{currentClass.name}</span>
                 <span className="text-[10px] text-amber-700">({currentClass.section})</span>
               </div>
             </div>
 
-            {/* Desktop Action Buttons */}
+            {/* Desktop actions */}
             <div className="hidden md:flex items-center gap-1.5 sm:gap-2">
-              {/* PWA Install Button */}
               <PWAInstallButton />
 
-              {/* SAVE TO MONGODB BUTTON */}
               <button
                 onClick={handleSaveToMongoDB}
                 disabled={isSaving}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all shadow-xs ${hasUnsavedChanges
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300'
-                    : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all shadow-xs disabled:opacity-70 ${hasUnsavedChanges ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300' : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
                   }`}
-                title="Save all class data and marks directly to MongoDB Atlas (Ctrl+S)"
+                title="Save all class data and marks to MongoDB Atlas (Ctrl+S)"
               >
-                {isSaving ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
-                )}
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                 <span>{isSaving ? 'Saving...' : 'Save to MongoDB'}</span>
-                {hasUnsavedChanges && (
-                  <span className="w-2 h-2 rounded-full bg-amber-300 ring-2 ring-white animate-pulse" />
-                )}
+                {hasUnsavedChanges && <span className="w-2 h-2 rounded-full bg-amber-300 ring-2 ring-white animate-pulse" />}
               </button>
 
-              {/* REFRESH FROM MONGODB BUTTON */}
               <button
                 onClick={handleRefreshFromMongoDB}
                 disabled={isRefreshing}
@@ -773,40 +914,32 @@ export default function App () {
                 <span>{isRefreshing ? 'Syncing...' : 'Refresh'}</span>
               </button>
 
-              {/* MongoDB Status Pill */}
               <div
                 className="hidden xl:flex items-center gap-1.5 px-2 py-1 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600"
-                title={isMongoConnected ? 'Connected to MongoDB Atlas cluster' : 'Not connected to MongoDB'}
+                title={isMongoConnected ? 'Connected to MongoDB Atlas cluster' : 'Connecting to MongoDB...'}
               >
-                <Database className={`w-3.5 h-3.5 ${isMongoConnected ? 'text-emerald-600' : 'text-rose-500'}`} />
-                <span className="font-semibold">{isMongoConnected ? 'MongoDB' : 'Disconnected'}</span>
-                {lastSavedTime && (
-                  <span className="text-[10px] text-slate-400 font-mono">({lastSavedTime})</span>
-                )}
+                <Database className={`w-3.5 h-3.5 ${isMongoConnected ? 'text-emerald-600' : 'text-slate-400'}`} />
+                <span className="font-semibold">{isMongoConnected ? 'MongoDB' : 'Connecting'}</span>
+                {lastSavedTime && <span className="text-[10px] text-slate-400 font-mono">({lastSavedTime})</span>}
               </div>
 
-              {/* Data Validation Status Badge */}
               {validationReport && (
                 <button
                   onClick={() => setIsValidationModalOpen( true )}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all border ${validationReport.isValid
-                      ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
-                      : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300 animate-pulse'
+                    ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300 animate-pulse'
                     }`}
                   title={`Data Validation: ${validationReport.score}% health score (${validationReport.errorCount} errors, ${validationReport.warningCount} warnings)`}
                 >
-                  {validationReport.isValid ? (
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  ) : (
-                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  )}
+                  {validationReport.isValid ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> : <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />}
                   <span>{validationReport.isValid ? 'Valid' : `${validationReport.errorCount} Issues`}</span>
                 </button>
               )}
 
               <button
                 onClick={() => setIsPasteImportOpen( true )}
-                className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors border border-slate-200"
+                className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200"
                 title="Paste data directly from Excel or Google Sheets"
               >
                 <ClipboardPaste className="w-3.5 h-3.5 text-amber-600" />
@@ -815,7 +948,7 @@ export default function App () {
 
               <button
                 onClick={() => setIsRegisterPrintOpen( true )}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 transition-all border border-slate-200"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-200"
                 title="Print Tabulation Register with Official Signatures"
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600" />
@@ -824,7 +957,7 @@ export default function App () {
 
               <button
                 onClick={() => setIsBatchCardsOpen( true )}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-500 transition-all shadow-xs"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-500 shadow-xs"
                 title="Print 4 Report Cards per A4 Page for All Students"
               >
                 <Printer className="w-3.5 h-3.5" />
@@ -832,17 +965,26 @@ export default function App () {
               </button>
 
               <button
+                onClick={() => setIsStorageModalOpen( true )}
+                className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200"
+                title="Data storage & backup"
+                aria-label="Data storage and backup"
+              >
+                <HardDrive className="w-4 h-4" />
+              </button>
+
+              <button
                 onClick={() => setIsSettingsOpen( true )}
-                className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors border border-slate-200"
+                className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200"
                 title="Configure School & Subjects"
+                aria-label="Settings"
               >
                 <Settings className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Mobile Horizontal Controls: Save + Refresh + Cards + Burger Menu */}
+            {/* Mobile controls */}
             <div className="flex md:hidden items-center gap-1 shrink-0">
-              {/* Mobile Save Button */}
               <button
                 onClick={handleSaveToMongoDB}
                 disabled={isSaving}
@@ -853,17 +995,14 @@ export default function App () {
                 {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                 <span>Save</span>
               </button>
-
-              {/* Mobile Refresh Button */}
               <button
                 onClick={handleRefreshFromMongoDB}
                 disabled={isRefreshing}
                 className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
-                title="Refresh and sync data from MongoDB"
+                aria-label="Refresh from MongoDB"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-600' : ''}`} />
               </button>
-
               <button
                 onClick={() => setIsBatchCardsOpen( true )}
                 className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-500 shadow-xs"
@@ -872,13 +1011,11 @@ export default function App () {
                 <Printer className="w-3.5 h-3.5" />
                 <span className="hidden xs:inline">Cards</span>
               </button>
-
-              {/* Hamburger Button for Mobile */}
               <button
-                onClick={() => setIsMobileNavOpen( !isMobileNavOpen )}
-                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors"
+                onClick={() => setIsMobileNavOpen( ( o ) => !o )}
+                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200"
                 aria-label="Toggle navigation menu"
-                title="Open menu"
+                aria-expanded={isMobileNavOpen}
               >
                 {isMobileNavOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>
@@ -886,21 +1023,19 @@ export default function App () {
           </div>
         </div>
 
-        {/* Dedicated Horizontal Class Selector Bar: Always horizontal, smooth scroll */}
+        {/* Class selector */}
         <div className="border-t border-slate-200/90 bg-slate-50/95 px-3 sm:px-6 py-1.5 overflow-x-auto whitespace-nowrap scrollbar-none flex items-center gap-1.5">
-          <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider pr-1 shrink-0">
-            Classes:
-          </span>
-
+          <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider pr-1 shrink-0">Classes:</span>
           {classes.map( ( cls ) => {
-            const isActive = cls.id === activeClassId;
+            const isActive = cls.id === currentClass.id;
             return (
               <button
                 key={cls.id}
                 onClick={() => setActiveClassId( cls.id )}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1 shrink-0 ${isActive
-                    ? 'bg-amber-400 text-slate-950 shadow-xs scale-102 ring-1 ring-amber-500/50'
-                    : 'bg-white text-slate-700 hover:bg-slate-200 hover:text-slate-950 border border-slate-200/80'
+                aria-pressed={isActive}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 shrink-0 ${isActive
+                  ? 'bg-amber-400 text-slate-950 shadow-xs ring-1 ring-amber-500/50'
+                  : 'bg-white text-slate-700 hover:bg-slate-200 hover:text-slate-950 border border-slate-200/80'
                   }`}
               >
                 <span>{cls.name}</span>
@@ -908,10 +1043,9 @@ export default function App () {
               </button>
             );
           } )}
-
           <button
             onClick={() => setIsClassModalOpen( true )}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors shrink-0 shadow-2xs"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 shrink-0"
             title="Manage All Classes or Add New Class"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -919,62 +1053,31 @@ export default function App () {
           </button>
         </div>
 
-        {/* Tab Switcher: Quarterly, Half-Yearly, Comparative, Analytics */}
+        {/* Tabs */}
         <div className="border-t border-slate-200/80 bg-slate-50/60 px-4 sm:px-6 lg:px-8">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 overflow-x-auto py-2 scrollbar-none">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <button
-                onClick={() => setActiveTab( 'quarterly' )}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'quarterly'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                  }`}
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                Quarterly Examination (Term 1)
-                <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-md bg-black/10">
-                  {quarterlyResults.length}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab( 'half_yearly' )}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'half_yearly'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                  }`}
-              >
-                <Layers className="w-4 h-4" />
-                Half Yearly Examination (Term 2)
-                <span className="ml-1 text-[10px] px-1.5 py-0.2 rounded-md bg-black/10">
-                  {halfYearlyResults.length}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab( 'comparative' )}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'comparative'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                  }`}
-              >
-                <TrendingUp className="w-4 h-4 text-amber-300" />
-                Comparative Growth (T1 vs T2)
-              </button>
-
-              <button
-                onClick={() => setActiveTab( 'analytics' )}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'analytics'
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                  }`}
-              >
-                <BarChart3 className="w-4 h-4 text-amber-400" />
-                Performance Insights & Toppers
-              </button>
+            <div className="flex items-center gap-2 sm:gap-3" role="tablist">
+              {TABS.map( ( tab ) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                const count = tabCount( tab.id );
+                return (
+                  <button
+                    key={tab.id}
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => setActiveTab( tab.id )}
+                    className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${isActive ? tab.activeClass : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                      }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {tab.label}
+                    {count !== null && <span className="ml-1 text-[10px] px-1.5 rounded-md bg-black/10">{count}</span>}
+                  </button>
+                );
+              } )}
             </div>
 
-            {/* Current Active Class Badge */}
             <div className="hidden lg:flex items-center gap-2 text-xs font-semibold text-slate-500 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <span>
@@ -985,57 +1088,17 @@ export default function App () {
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* ---------------- Main ---------------- */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        {/* Tab 1: Quarterly Examination Sheet */}
-        {activeTab === 'quarterly' && (
+        {( activeTab === 'quarterly' || activeTab === 'half_yearly' ) && (
           <TabulationSheet
-            examTitle={schoolConfig.quarterlyTitle}
-            schoolConfig={activeClassConfig}
-            subjects={currentSubjects}
-            students={currentStudents}
-            results={quarterlyResults}
-            marksMap={currentQuarterlyMarks}
-            onUpdateMark={handleUpdateMark}
-            onAddStudent={handleAddStudent}
-            onDeleteStudent={handleDeleteStudent}
-            onUpdateStudent={handleUpdateStudent}
-            onOpenReportCard={( id ) => setSelectedStudentForCard( id )}
-            onOpenRapidEntry={() => setIsRapidEntryOpen( true )}
-            onClearMarks={handleClearMarks}
-            onMoveRowUp={handleMoveRowUp}
-            onMoveRowDown={handleMoveRowDown}
-            onReorderStudents={handleReorderStudents}
-            onInsertRowAt={handleInsertRowAt}
-            onOpenRegisterPrint={() => setIsRegisterPrintOpen( true )}
+            {...tabulationProps}
+            examTitle={currentExamTitle}
+            results={currentResults}
+            marksMap={currentMarks}
           />
         )}
 
-        {/* Tab 2: Half Yearly Examination Sheet */}
-        {activeTab === 'half_yearly' && (
-          <TabulationSheet
-            examTitle={schoolConfig.halfYearlyTitle}
-            schoolConfig={activeClassConfig}
-            subjects={currentSubjects}
-            students={currentStudents}
-            results={halfYearlyResults}
-            marksMap={currentHalfYearlyMarks}
-            onUpdateMark={handleUpdateMark}
-            onAddStudent={handleAddStudent}
-            onDeleteStudent={handleDeleteStudent}
-            onUpdateStudent={handleUpdateStudent}
-            onOpenReportCard={( id ) => setSelectedStudentForCard( id )}
-            onOpenRapidEntry={() => setIsRapidEntryOpen( true )}
-            onClearMarks={handleClearMarks}
-            onMoveRowUp={handleMoveRowUp}
-            onMoveRowDown={handleMoveRowDown}
-            onReorderStudents={handleReorderStudents}
-            onInsertRowAt={handleInsertRowAt}
-            onOpenRegisterPrint={() => setIsRegisterPrintOpen( true )}
-          />
-        )}
-
-        {/* Tab 3: Comparative Quarterly vs Half Yearly Performance Report */}
         {activeTab === 'comparative' && (
           <ComparativeReport
             comparativeResults={comparativeResults}
@@ -1045,7 +1108,6 @@ export default function App () {
           />
         )}
 
-        {/* Tab 4: Performance Analytics & Class Toppers */}
         {activeTab === 'analytics' && (
           <AnalyticsView
             results={currentResults}
@@ -1056,54 +1118,38 @@ export default function App () {
         )}
       </main>
 
-      {/* MODALS */}
-
-      {/* Mobile Drawer (Hamburger Menu) */}
+      {/* ---------------- Mobile drawer ---------------- */}
       {isMobileNavOpen && (
         <div className="fixed inset-0 z-50 md:hidden flex">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs transition-opacity"
-            onClick={() => setIsMobileNavOpen( false )}
-          />
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-xs" onClick={() => setIsMobileNavOpen( false )} />
 
-          {/* Slide-out Menu Panel */}
           <div className="relative ml-auto w-full max-w-xs bg-white h-full shadow-2xl flex flex-col z-10 overflow-y-auto">
-            {/* Drawer Header */}
             <div className="p-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-black">
+                <div className="w-8 h-8 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center">
                   <GraduationCap className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm leading-tight">School Menu</h3>
-                  <p className="text-[10px] text-slate-400 truncate max-w-[170px]">{schoolConfig.schoolName || 'Unnamed School'}</p>
+                  <p className="text-[10px] text-slate-400 truncate max-w-[170px]">{schoolConfig.schoolName}</p>
                 </div>
               </div>
-              <button
-                onClick={() => setIsMobileNavOpen( false )}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-              >
+              <button onClick={() => setIsMobileNavOpen( false )} className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" aria-label="Close menu">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Cloud MongoDB Sync Actions */}
             <div className="p-3 bg-emerald-50/70 border-b border-emerald-200 space-y-2">
               <div className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5 font-bold text-slate-800">
                   <Database className="w-3.5 h-3.5 text-emerald-600" />
                   MongoDB Atlas
                 </span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {lastSavedTime ? `Synced: ${lastSavedTime}` : isMongoConnected ? 'Cloud Connected' : 'Disconnected'}
-                </span>
+                <span className="text-[10px] text-slate-500 font-mono">{lastSavedTime ? `Synced: ${lastSavedTime}` : 'Cloud Connected'}</span>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={async () => {
-                    await handleSaveToMongoDB();
-                  }}
+                  onClick={handleSaveToMongoDB}
                   disabled={isSaving}
                   className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs"
                 >
@@ -1111,9 +1157,7 @@ export default function App () {
                   <span>{isSaving ? 'Saving...' : 'Save Data'}</span>
                 </button>
                 <button
-                  onClick={async () => {
-                    await handleRefreshFromMongoDB();
-                  }}
+                  onClick={handleRefreshFromMongoDB}
                   disabled={isRefreshing}
                   className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs border border-slate-300"
                 >
@@ -1124,199 +1168,98 @@ export default function App () {
             </div>
 
             <div className="p-4 space-y-5 flex-1">
-              {/* Classes Section */}
-              <div>
+              <section>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-slate-500">
-                    Classes ({classes.length})
-                  </span>
-                  <button
-                    onClick={() => {
-                      setIsMobileNavOpen( false );
-                      setIsClassModalOpen( true );
-                    }}
-                    className="text-xs font-bold text-amber-600 flex items-center gap-1 hover:underline"
-                  >
+                  <span className="text-xs font-black uppercase tracking-wider text-slate-500">Classes ({classes.length})</span>
+                  <button onClick={closeNavThen( () => setIsClassModalOpen( true ) )} className="text-xs font-bold text-amber-600 flex items-center gap-1 hover:underline">
                     <Plus className="w-3.5 h-3.5" /> Manage
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
-                  {classes.map( ( cls ) => {
-                    const isActive = cls.id === activeClassId;
+                  {classes.map( ( cls ) => (
+                    <button
+                      key={cls.id}
+                      onClick={closeNavThen( () => setActiveClassId( cls.id ) )}
+                      className={`p-2 rounded-xl text-xs font-bold text-left border ${cls.id === currentClass.id ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-xs' : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+                        }`}
+                    >
+                      <div className="truncate">{cls.name}</div>
+                      <div className="text-[10px] opacity-75 font-semibold">Section {cls.section}</div>
+                    </button>
+                  ) )}
+                </div>
+              </section>
+
+              <section>
+                <span className="text-xs font-black uppercase tracking-wider text-slate-500 block mb-2">Examination Term</span>
+                <div className="space-y-1">
+                  {TABS.map( ( tab ) => {
+                    const Icon = tab.icon;
+                    const count = tabCount( tab.id );
                     return (
                       <button
-                        key={cls.id}
-                        onClick={() => {
-                          setActiveClassId( cls.id );
-                          setIsMobileNavOpen( false );
-                        }}
-                        className={`p-2 rounded-xl text-xs font-bold text-left transition-all border ${isActive
-                            ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-xs'
-                            : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200'
+                        key={tab.id}
+                        onClick={closeNavThen( () => setActiveTab( tab.id ) )}
+                        className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold border ${activeTab === tab.id ? 'bg-amber-500 text-slate-950 border-amber-600' : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
                           }`}
                       >
-                        <div className="truncate">{cls.name}</div>
-                        <div className="text-[10px] opacity-75 font-semibold">Section {cls.section}</div>
+                        <span className="flex items-center gap-2">
+                          <Icon className="w-4 h-4" /> {tab.shortLabel}
+                        </span>
+                        {count !== null && <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/10">{count}</span>}
                       </button>
                     );
                   } )}
                 </div>
-              </div>
+              </section>
 
-              {/* Exam Switcher */}
-              <div>
-                <span className="text-xs font-black uppercase tracking-wider text-slate-500 block mb-2">
-                  Examination Term
-                </span>
-                <div className="space-y-1">
-                  <button
-                    onClick={() => {
-                      setActiveTab( 'quarterly' );
-                      setIsMobileNavOpen( false );
-                    }}
-                    className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold border transition-colors ${activeTab === 'quarterly'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600'
-                        : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
-                      }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <FileSpreadsheet className="w-4 h-4" /> Term 1: Quarterly
-                    </span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/10">{quarterlyResults.length}</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setActiveTab( 'half_yearly' );
-                      setIsMobileNavOpen( false );
-                    }}
-                    className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold border transition-colors ${activeTab === 'half_yearly'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600'
-                        : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
-                      }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Layers className="w-4 h-4" /> Term 2: Half-Yearly
-                    </span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/10">{halfYearlyResults.length}</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setActiveTab( 'comparative' );
-                      setIsMobileNavOpen( false );
-                    }}
-                    className={`w-full flex items-center gap-2 p-2.5 rounded-xl text-xs font-bold border transition-colors ${activeTab === 'comparative'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600'
-                        : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
-                      }`}
-                  >
-                    <TrendingUp className="w-4 h-4" /> Comparative Growth
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setActiveTab( 'analytics' );
-                      setIsMobileNavOpen( false );
-                    }}
-                    className={`w-full flex items-center gap-2 p-2.5 rounded-xl text-xs font-bold border transition-colors ${activeTab === 'analytics'
-                        ? 'bg-amber-500 text-slate-950 border-amber-600'
-                        : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
-                      }`}
-                  >
-                    <BarChart3 className="w-4 h-4" /> Performance Analytics
-                  </button>
-                </div>
-              </div>
-
-              {/* Quick Actions & Tools */}
-              <div>
-                <span className="text-xs font-black uppercase tracking-wider text-slate-500 block mb-2">
-                  Actions & Exports
-                </span>
+              <section>
+                <span className="text-xs font-black uppercase tracking-wider text-slate-500 block mb-2">Actions & Exports</span>
                 <div className="space-y-1.5">
-                  <button
-                    onClick={() => {
-                      setIsMobileNavOpen( false );
-                      setIsBatchCardsOpen( true );
-                    }}
-                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-xs"
-                  >
+                  <button onClick={closeNavThen( () => setIsBatchCardsOpen( true ) )} className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-xs">
                     <Printer className="w-4 h-4" />
                     <span>Print 4 Cards / A4 Page</span>
                   </button>
-
-                  <button
-                    onClick={() => {
-                      setIsMobileNavOpen( false );
-                      setIsRegisterPrintOpen( true );
-                    }}
-                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200"
-                  >
+                  <button onClick={closeNavThen( () => setIsRegisterPrintOpen( true ) )} className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200">
                     <FileSpreadsheet className="w-4 h-4 text-amber-600" />
                     <span>Print Tabulation Register</span>
                   </button>
-
-                  <button
-                    onClick={() => {
-                      setIsMobileNavOpen( false );
-                      setIsPasteImportOpen( true );
-                    }}
-                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200"
-                  >
+                  <button onClick={closeNavThen( () => setIsPasteImportOpen( true ) )} className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200">
                     <ClipboardPaste className="w-4 h-4 text-amber-600" />
                     <span>Import Excel / Paste</span>
                   </button>
 
                   {validationReport && (
                     <button
-                      onClick={() => {
-                        setIsMobileNavOpen( false );
-                        setIsValidationModalOpen( true );
-                      }}
-                      className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold border ${validationReport.isValid
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                          : 'bg-rose-50 text-rose-800 border-rose-300'
+                      onClick={closeNavThen( () => setIsValidationModalOpen( true ) )}
+                      className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold border ${validationReport.isValid ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-rose-50 text-rose-800 border-rose-300'
                         }`}
                     >
                       <span className="flex items-center gap-2">
-                        <ShieldCheck className="w-4 h-4 text-emerald-600" /> Data Validation
+                        <ShieldCheck className={`w-4 h-4 ${validationReport.isValid ? 'text-emerald-600' : 'text-rose-600'}`} /> Data Validation
                       </span>
                       <span className="text-[10px] font-extrabold">{validationReport.score}% Score</span>
                     </button>
                   )}
 
-                  <button
-                    onClick={() => {
-                      setIsMobileNavOpen( false );
-                      setIsSettingsOpen( true );
-                    }}
-                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200"
-                  >
+                  <button onClick={closeNavThen( () => setIsStorageModalOpen( true ) )} className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200">
+                    <HardDrive className="w-4 h-4 text-slate-600" />
+                    <span>Data Storage & Backup</span>
+                  </button>
+                  <button onClick={closeNavThen( () => setIsSettingsOpen( true ) )} className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200">
                     <Settings className="w-4 h-4 text-slate-600" />
                     <span>School & Subject Settings</span>
                   </button>
                 </div>
-              </div>
+              </section>
             </div>
           </div>
         </div>
       )}
 
-      {/* Manage All Classes Modal */}
-      <ClassModal
-        isOpen={isClassModalOpen}
-        onClose={() => setIsClassModalOpen( false )}
-        classes={classes}
-        activeClassId={activeClassId}
-        onSelectClass={( id ) => setActiveClassId( id )}
-        onCreateClass={handleCreateClass}
-        onUpdateClass={handleUpdateClass}
-        onDeleteClass={handleDeleteClass}
-        onDuplicateClass={handleDuplicateClass}
-      />
+      {/* ---------------- Modals ---------------- */}
+      {classModal}
 
-      {/* Official Tabulation Register Print Modal */}
       <TabulationRegisterModal
         isOpen={isRegisterPrintOpen}
         onClose={() => setIsRegisterPrintOpen( false )}
@@ -1326,7 +1269,6 @@ export default function App () {
         results={currentResults}
       />
 
-      {/* Rapid Numpad Data Entry Modal */}
       <RapidEntryModal
         isOpen={isRapidEntryOpen}
         onClose={() => setIsRapidEntryOpen( false )}
@@ -1337,10 +1279,9 @@ export default function App () {
         termTitle={currentExamTitle}
       />
 
-      {/* Individual Student Report Card */}
       {selectedResult && (
         <StudentReportCard
-          isOpen={!!selectedStudentForCard}
+          isOpen
           onClose={() => setSelectedStudentForCard( null )}
           result={selectedResult}
           allResults={currentResults}
@@ -1351,7 +1292,6 @@ export default function App () {
         />
       )}
 
-      {/* Batch Print All Student Report Cards */}
       <BatchReportCards
         isOpen={isBatchCardsOpen}
         onClose={() => setIsBatchCardsOpen( false )}
@@ -1361,7 +1301,6 @@ export default function App () {
         examTitle={currentExamTitle}
       />
 
-      {/* Paste / Excel Import Modal */}
       <PasteImportModal
         isOpen={isPasteImportOpen}
         onClose={() => setIsPasteImportOpen( false )}
@@ -1369,27 +1308,17 @@ export default function App () {
         onImportData={handleImportPastedData}
       />
 
-      {/* School & Subject Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen( false )}
         schoolConfig={activeClassConfig}
-        onUpdateSchoolConfig={( cfg ) => {
-          setHasUnsavedChanges( true );
-          setSchoolConfig( cfg );
-          updateCurrentClass( ( prev ) => ( {
-            ...prev,
-            name: cfg.className,
-            section: cfg.section,
-          } ) );
-        }}
+        onUpdateSchoolConfig={( cfg ) => handleUpdateSchoolConfig( cfg, true )}
         subjects={currentSubjects}
-        onUpdateSubjects={( subs ) => {
-          updateCurrentClass( ( prev ) => ( {...prev, subjects: subs} ) );
-        }}
+        onUpdateSubjects={( subs ) => updateCurrentClass( ( prev ) => ( {...prev, subjects: subs} ) )}
+        // "Reset defaults" now simply re-pulls the real data instead of pointing at a hard-coded class id.
+        onResetDefaults={handleRefreshFromMongoDB}
       />
 
-      {/* Data Validation Center Modal */}
       <DataValidationModal
         isOpen={isValidationModalOpen}
         onClose={() => setIsValidationModalOpen( false )}
@@ -1397,36 +1326,21 @@ export default function App () {
         allClasses={classes}
         onUpdateClass={( updated ) => updateCurrentClass( () => updated )}
         onUpdateAllClasses={( all ) => {
+          all.forEach( ( c ) => dirtyClassIdsRef.current.add( c.id ) );
           setHasUnsavedChanges( true );
           setClasses( all );
         }}
       />
 
-      {/* Data Storage & Backup Manager Modal */}
       <DataStorageModal
         isOpen={isStorageModalOpen}
         onClose={() => setIsStorageModalOpen( false )}
         classes={classes}
         schoolConfig={schoolConfig}
-        defaultTab={storageDefaultTab}
+        defaultTab="mongodb"
       />
 
-      {/* Floating Sync Toast Notification */}
-      {syncToast && (
-        <div
-          className={`fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-bold border transition-all animate-in slide-in-from-bottom duration-200 ${syncToast.type === 'success'
-              ? 'bg-slate-900 text-white border-emerald-500 shadow-emerald-950/20'
-              : 'bg-rose-950 text-white border-rose-500 shadow-rose-950/20'
-            }`}
-        >
-          {syncToast.type === 'success' ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          ) : (
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-          )}
-          <span>{syncToast.message}</span>
-        </div>
-      )}
+      <Toast toast={toast} />
     </div>
   );
 }

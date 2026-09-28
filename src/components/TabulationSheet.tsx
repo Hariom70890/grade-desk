@@ -69,7 +69,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
   onInsertRowAt,
   onOpenRegisterPrint,
 }) => {
-  const [viewMode, setViewMode] = useState<'classic' | 'modern'>('modern');
+  const [viewMode, setViewMode] = useState<'classic' | 'modern'>('classic');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
 
@@ -148,6 +148,34 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
     setSortField('default');
   };
 
+  // Focus helper that reliably moves cursor to the target cell (with select and scrollIntoView)
+  const focusCell = (targetRowIndex: number, targetColIndex: number) => {
+    if (targetRowIndex < 0 || targetRowIndex >= displayedResults.length) return;
+    if (targetColIndex < 0 || targetColIndex >= subjects.length) return;
+
+    // setTimeout guarantees React's onChange re-render commit completes first
+    setTimeout(() => {
+      const key = getCellKey(targetRowIndex, targetColIndex);
+      let target = cellRefs.current.get(key);
+      if (!target) {
+        target = cellRefs.current.get(`pro-${key}`);
+      }
+      if (!target) {
+        target = document.querySelector<HTMLInputElement>(
+          `input[data-row="${targetRowIndex}"][data-col="${targetColIndex}"]`
+        ) || undefined;
+      }
+
+      if (target) {
+        target.focus();
+        target.select();
+        try {
+          target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        } catch (e) {}
+      }
+    }, 20);
+  };
+
   const handleCellKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
     studentIndex: number,
@@ -156,29 +184,29 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
     subjectId: string,
     maxMarks: number
   ) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.key === 'NumpadEnter') {
       e.preventDefault();
-      // Move to same subject, next student
-      const nextKey = getCellKey(studentIndex + 1, subjectIndex);
-      const nextInput = cellRefs.current.get(nextKey);
-      if (nextInput) {
-        nextInput.focus();
-        nextInput.select();
+      e.stopPropagation();
+      if (e.shiftKey) {
+        // Shift + Enter: Move to previous row of same column
+        focusCell(studentIndex - 1, subjectIndex);
+      } else {
+        // Enter: MOVE TO NEXT ROW OF SAME COLUMN
+        focusCell(studentIndex + 1, subjectIndex);
       }
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      const nextKey = getCellKey(studentIndex + 1, subjectIndex);
-      cellRefs.current.get(nextKey)?.focus();
+      focusCell(studentIndex + 1, subjectIndex);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      const prevKey = getCellKey(studentIndex - 1, subjectIndex);
-      cellRefs.current.get(prevKey)?.focus();
-    } else if (e.key === 'ArrowRight' && (e.currentTarget.selectionStart === e.currentTarget.value.length || e.currentTarget.value === '')) {
-      const rightKey = getCellKey(studentIndex, subjectIndex + 1);
-      cellRefs.current.get(rightKey)?.focus();
+      focusCell(studentIndex - 1, subjectIndex);
+    } else if (
+      e.key === 'ArrowRight' &&
+      (e.currentTarget.selectionStart === e.currentTarget.value.length || e.currentTarget.value === '')
+    ) {
+      focusCell(studentIndex, subjectIndex + 1);
     } else if (e.key === 'ArrowLeft' && e.currentTarget.selectionStart === 0) {
-      const leftKey = getCellKey(studentIndex, subjectIndex - 1);
-      cellRefs.current.get(leftKey)?.focus();
+      focusCell(studentIndex, subjectIndex - 1);
     }
   };
 
@@ -888,10 +916,10 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                                 if (el) cellRefs.current.set(cellKey, el);
                                 else cellRefs.current.delete(cellKey);
                               }}
-                              type="number"
-                              step="any"
-                              min="0"
-                              max={sub.maxMarks}
+                              data-row={displayIdx}
+                              data-col={subjectIdx}
+                              type="text"
+                              inputMode="decimal"
                               value={markVal !== undefined && markVal !== null ? markVal : ''}
                               onChange={(e) =>
                                 handleCellChange(res.student.id, sub.id, e.target.value, sub.maxMarks)
@@ -1044,8 +1072,9 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           </div>
                         </div>
                       </td>
-                      {subjects.map((sub) => {
+                      {subjects.map((sub, subjectIdx) => {
                         const markVal = res.marks[sub.id];
+                        const cellKey = getCellKey(displayIdx, subjectIdx);
                         const isOverMax = markVal !== undefined && markVal !== null && Number(markVal) > sub.maxMarks;
                         const isNegative = markVal !== undefined && markVal !== null && Number(markVal) < 0;
                         const isInvalid = isOverMax || isNegative;
@@ -1053,13 +1082,20 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                         return (
                           <td key={sub.id} className="py-1 px-1 text-center relative">
                             <input
-                              type="number"
-                              step="any"
-                              min="0"
-                              max={sub.maxMarks}
+                              ref={(el) => {
+                                if (el) cellRefs.current.set(`pro-${cellKey}`, el);
+                                else cellRefs.current.delete(`pro-${cellKey}`);
+                              }}
+                              data-row={displayIdx}
+                              data-col={subjectIdx}
+                              type="text"
+                              inputMode="decimal"
                               value={markVal !== undefined && markVal !== null ? markVal : ''}
                               onChange={(e) =>
                                 handleCellChange(res.student.id, sub.id, e.target.value, sub.maxMarks)
+                              }
+                              onKeyDown={(e) =>
+                                handleCellKeyDown(e, displayIdx, subjectIdx, res.student.id, sub.id, sub.maxMarks)
                               }
                               className={`w-16 py-1 text-center font-bold text-xs rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden transition-colors ${
                                 isInvalid

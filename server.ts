@@ -16,67 +16,31 @@ const PORT = process.env.PORT || 8080;
 // Enable JSON body parsing with high limit for batch tabulation data
 app.use(express.json({ limit: '25mb' }));
 
-// -------------------------------------------------------------
-// Single source of truth for the MongoDB connection.
-//
-// Every real data endpoint (status/sync/pull) goes through
-// getMongoClient(), which ALWAYS uses process.env.MONGODB_URI —
-// nothing from a request body can redirect reads or writes to a
-// different cluster or database. If MONGODB_URI changes (e.g. you
-// edit .env and restart), the previous cached connection is closed
-// and a fresh one is opened, so stale data from an old URI can never
-// be served.
-// -------------------------------------------------------------
+// Cached MongoDB client instance
 let cachedClient: MongoClient | null = null;
 let cachedUri: string | null = null;
-let cachedDbName: string = '';
 
-/**
- * Pulls the database name out of a mongodb:// or mongodb+srv:// URI's
- * path segment, e.g. ".../myCluster.mongodb.net/gradedesk?retryWrites=..."
- * -> "gradedesk". Returns '' if the URI doesn't specify one, in which
- * case the driver's own default (the db named in the URI, or "test")
- * is used instead.
- */
-function extractDbName(uri: string): string {
+async function getMongoClient(uri?: string): Promise<{ client: MongoClient; dbName: string }> {
+  const targetUri = uri || process.env.MONGODB_URI;
+  if (!targetUri) {
+    throw new Error('MONGODB_URI is not set in environment or provided in request');
+  }
+
+  // Parse DB name from URI or use default
+  let dbName = 'gradedesk';
   try {
-    const urlObj = new URL(uri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://'));
+    const urlObj = new URL(targetUri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://'));
     const pathname = urlObj.pathname.replace(/^\//, '');
     if (pathname && !pathname.includes('?')) {
-      return pathname;
+      dbName = pathname;
     }
-  } catch (e: any) {
-    console.warn('Could not parse a database name out of MONGODB_URI, using the driver default instead:', e?.message);
-  }
-  return '';
-}
-
-async function getMongoClient(): Promise<{ client: MongoClient; dbName: string }> {
-  const targetUri = process.env.MONGODB_URI;
-  if (!targetUri) {
-    throw new Error('MONGODB_URI is not set in environment (.env)');
+  } catch (e) {
+    // Fallback if URL parsing fails
   }
 
-  // Fast path: already connected to exactly this URI.
   if (cachedClient && cachedUri === targetUri) {
-    return { client: cachedClient, dbName: cachedDbName };
+    return { client: cachedClient, dbName };
   }
-
-  // The URI changed since the last connection (env var was updated and the
-  // server restarted, or dotenv was reloaded) — close the old connection so
-  // we never keep silently serving data from a previous cluster.
-  if (cachedClient && cachedUri !== targetUri) {
-    try {
-      await cachedClient.close();
-    } catch {
-      // ignore errors closing a stale connection
-    }
-    cachedClient = null;
-    cachedUri = null;
-    cachedDbName = '';
-  }
-
-  const dbName = extractDbName(targetUri);
 
   const client = new MongoClient(targetUri, {
     serverApi: {
@@ -91,14 +55,8 @@ async function getMongoClient(): Promise<{ client: MongoClient; dbName: string }
   await client.connect();
   cachedClient = client;
   cachedUri = targetUri;
-  cachedDbName = dbName;
 
   return { client, dbName };
-}
-
-/** client.db('') is not the same as "use the URI's default database" — guard it. */
-function getDb(client: MongoClient, dbName: string) {
-  return dbName ? client.db(dbName) : client.db();
 }
 
 // -------------------------------------------------------------
@@ -116,22 +74,24 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// MongoDB Connection Status & Latency Check — always the configured URI.
+// MongoDB Connection Status & Latency Check
 app.get('/api/mongodb/status', async (req: Request, res: Response) => {
-  if (!process.env.MONGODB_URI) {
+  const configuredUri = process.env.MONGODB_URI;
+
+  if (!configuredUri) {
     return res.json({
       configured: false,
       connected: false,
       message: 'MONGODB_URI is not set in environment variables (.env)',
-      recommendation: 'Add MONGODB_URI to your .env file or hosting provider\'s Environment Variables.',
+      recommendation: 'Add MONGODB_URI to your .env file or Vercel Environment Variables.',
     });
   }
 
   const startTime = Date.now();
   try {
-    const { client, dbName } = await getMongoClient();
-    const db = getDb(client, dbName);
-
+    const { client, dbName } = await getMongoClient(configuredUri);
+    const db = client.db(dbName);
+    
     // Ping the deployment
     await db.command({ ping: 1 });
     const latencyMs = Date.now() - startTime;
@@ -148,7 +108,7 @@ app.get('/api/mongodb/status', async (req: Request, res: Response) => {
     res.json({
       configured: true,
       connected: true,
-      dbName: db.databaseName,
+      dbName,
       latencyMs,
       collections: collectionNames,
       classesInCloud: classesCount,
@@ -163,10 +123,7 @@ app.get('/api/mongodb/status', async (req: Request, res: Response) => {
   }
 });
 
-// Test-connect to an arbitrary URI, purely for verification. This is
-// intentionally isolated from getMongoClient()/cachedClient — it never
-// touches or replaces the live connection used by sync/pull, so pasting a
-// URI in here to "test" it can never redirect where your real data goes.
+// Test custom or provided MongoDB URI
 app.post('/api/mongodb/test', async (req: Request, res: Response) => {
   const { uri } = req.body;
   const targetUri = uri || process.env.MONGODB_URI;
@@ -178,6 +135,7 @@ app.post('/api/mongodb/test', async (req: Request, res: Response) => {
     });
   }
 
+  // Basic format sanity check
   if (!targetUri.startsWith('mongodb://') && !targetUri.startsWith('mongodb+srv://')) {
     return res.status(400).json({
       success: false,
@@ -186,58 +144,264 @@ app.post('/api/mongodb/test', async (req: Request, res: Response) => {
   }
 
   const startTime = Date.now();
-  let testClient: MongoClient | null = null;
   try {
-    testClient = new MongoClient(targetUri, {
-      serverApi: { version: ServerApiVersion.v1, strict: false, deprecationErrors: true },
-      connectTimeoutMS: 8000,
-      serverSelectionTimeoutMS: 8000,
-    });
-    await testClient.connect();
-    const dbName = extractDbName(targetUri);
-    const db = dbName ? testClient.db(dbName) : testClient.db();
+    const { client, dbName } = await getMongoClient(targetUri);
+    const db = client.db(dbName);
     await db.command({ ping: 1 });
     const latencyMs = Date.now() - startTime;
 
+    // Mask password in response for security
     const maskedUri = targetUri.replace(/:(.*?)@/, ':******@');
-    const isActiveUri = targetUri === process.env.MONGODB_URI;
 
     res.json({
       success: true,
       message: 'Successfully connected to MongoDB cluster!',
       latencyMs,
-      dbName: db.databaseName,
+      dbName,
       maskedUri,
-      isActiveUri,
-      note: isActiveUri
-        ? undefined
-        : 'This URI is NOT your configured MONGODB_URI — it was only tested, nothing was read or written to it.',
     });
   } catch (err: any) {
     res.status(500).json({
       success: false,
       error: err.message || 'Connection failed',
     });
-  } finally {
-    if (testClient) {
-      try {
-        await testClient.close();
-      } catch {
-        // ignore
-      }
-    }
   }
 });
 
-// Sync data to MongoDB (Push / Cloud Backup) — always the configured URI.
-// Any `customUri` in the request body is intentionally ignored: this
-// endpoint must only ever write to process.env.MONGODB_URI.
-app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
-  const { classes, schoolConfig } = req.body;
+// Helper to deeply merge two sets of marks without deleting existing entries
+// Blank, null, undefined, or empty values from one teacher will NEVER overwrite a real mark entered by another teacher!
+function mergeMarks(
+  existingMarks: Record<string, Record<string, any>> = {},
+  incomingMarks: Record<string, Record<string, any>> = {}
+): Record<string, Record<string, number | null>> {
+  const merged: Record<string, Record<string, number | null>> = {};
 
-  if (req.body.customUri) {
-    console.warn('[mongodb/sync] Ignoring customUri from request body — writes always go to the configured MONGODB_URI.');
+  // 1. Copy all existing valid marks from MongoDB
+  for (const sId of Object.keys(existingMarks || {})) {
+    merged[sId] = {};
+    const studentExisting = existingMarks[sId] || {};
+    for (const subId of Object.keys(studentExisting)) {
+      const val = studentExisting[subId];
+      if (val !== null && val !== undefined && val !== '' && !Number.isNaN(Number(val))) {
+        merged[sId][subId] = Number(val);
+      }
+    }
   }
+
+  // 2. Merge incoming marks: ONLY apply if incoming mark is a valid number (including 0 for absent).
+  // Blank, null, undefined, or empty strings in incomingMarks must NEVER overwrite an existing mark!
+  for (const sId of Object.keys(incomingMarks || {})) {
+    if (!merged[sId]) merged[sId] = {};
+    const studentIncoming = incomingMarks[sId] || {};
+    for (const subId of Object.keys(studentIncoming)) {
+      const incomingVal = studentIncoming[subId];
+      if (
+        incomingVal !== null &&
+        incomingVal !== undefined &&
+        incomingVal !== '' &&
+        !Number.isNaN(Number(incomingVal))
+      ) {
+        merged[sId][subId] = Number(incomingVal);
+      }
+    }
+  }
+
+  return merged;
+}
+
+// Helper to merge student arrays without deleting previous students
+function mergeStudents(existingStudents: any[] = [], incomingStudents: any[] = []): any[] {
+  const map = new Map<string, any>();
+  for (const s of existingStudents || []) {
+    if (s && s.id) map.set(s.id, s);
+  }
+  for (const s of incomingStudents || []) {
+    if (s && s.id) {
+      const existing = map.get(s.id);
+      if (existing) {
+        map.set(s.id, {
+          ...existing,
+          ...s,
+          name: s.name && s.name.trim() !== '' ? s.name : existing.name,
+          rollNo: s.rollNo && s.rollNo.trim() !== '' ? s.rollNo : existing.rollNo,
+        });
+      } else {
+        map.set(s.id, s);
+      }
+    }
+  }
+  return Array.from(map.values()).map((s, idx) => ({ ...s, sNo: idx + 1 }));
+}
+
+// Helper to merge subject arrays
+function mergeSubjects(existingSubjects: any[] = [], incomingSubjects: any[] = []): any[] {
+  const map = new Map<string, any>();
+  for (const sub of existingSubjects || []) {
+    if (sub && sub.id) map.set(sub.id, sub);
+  }
+  for (const sub of incomingSubjects || []) {
+    if (sub && sub.id) {
+      const existing = map.get(sub.id);
+      map.set(sub.id, existing ? { ...existing, ...sub } : sub);
+    }
+  }
+  return Array.from(map.values());
+}
+
+// PATCH: Update ONLY that student's marks for that particular subject ID (atomic update)
+const handleUpdateStudentSubjectMark = async (req: Request, res: Response) => {
+  const { classId, studentId, subjectId } = req.params;
+  const { term, mark } = req.body;
+
+  if (!classId || !term || !studentId || !subjectId) {
+    return res.status(400).json({ success: false, message: 'Missing classId, term, studentId, or subjectId' });
+  }
+
+  try {
+    const { client, dbName } = await getMongoClient();
+    const db = client.db(dbName);
+    const classesCol = db.collection('classes');
+
+    const marksField = term === 'halfYearly' ? 'halfYearlyMarks' : 'quarterlyMarks';
+    const fieldPath = `${marksField}.${studentId}.${subjectId}`;
+
+    if (mark !== null && mark !== undefined && mark !== '' && !Number.isNaN(Number(mark))) {
+      // Set ONLY this specific subject mark for this specific student ID
+      await classesCol.updateOne(
+        { id: classId },
+        { 
+          $set: { 
+            [fieldPath]: Number(mark),
+            updatedAt: new Date()
+          } 
+        },
+        { upsert: true }
+      );
+    } else {
+      // Mark is cleared for this student & subject only
+      await classesCol.updateOne(
+        { id: classId },
+        { 
+          $unset: { [fieldPath]: "" },
+          $set: { updatedAt: new Date() }
+        }
+      );
+    }
+
+    res.json({
+      success: true,
+      classId,
+      term,
+      studentId,
+      subjectId,
+      mark: mark !== null && mark !== undefined && mark !== '' ? Number(mark) : null
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to update student subject mark' });
+  }
+};
+
+app.patch('/api/mongodb/classes/:classId/students/:studentId/subjects/:subjectId/mark', handleUpdateStudentSubjectMark);
+app.put('/api/mongodb/classes/:classId/students/:studentId/subjects/:subjectId/mark', handleUpdateStudentSubjectMark);
+
+// PATCH: Batch update ONLY the specific modified marks (studentId & subjectId array)
+const handleBatchUpdateMarks = async (req: Request, res: Response) => {
+  const { classId } = req.params;
+  const { term, marks } = req.body;
+
+  if (!classId || !term || !Array.isArray(marks)) {
+    return res.status(400).json({ success: false, message: 'Missing classId, term, or marks array' });
+  }
+
+  try {
+    const { client, dbName } = await getMongoClient();
+    const db = client.db(dbName);
+    const classesCol = db.collection('classes');
+
+    const marksField = term === 'halfYearly' ? 'halfYearlyMarks' : 'quarterlyMarks';
+    const $set: Record<string, any> = { updatedAt: new Date() };
+    const $unset: Record<string, any> = {};
+
+    for (const item of marks) {
+      if (!item.studentId || !item.subjectId) continue;
+      const fieldPath = `${marksField}.${item.studentId}.${item.subjectId}`;
+      if (item.mark !== null && item.mark !== undefined && item.mark !== '' && !Number.isNaN(Number(item.mark))) {
+        $set[fieldPath] = Number(item.mark);
+      } else {
+        $unset[fieldPath] = "";
+      }
+    }
+
+    const updateDoc: any = {};
+    if (Object.keys($set).length > 0) updateDoc.$set = $set;
+    if (Object.keys($unset).length > 0) updateDoc.$unset = $unset;
+
+    await classesCol.updateOne({ id: classId }, updateDoc, { upsert: true });
+
+    res.json({ success: true, classId, term, updatedCount: marks.length });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to batch update marks' });
+  }
+};
+
+app.patch('/api/mongodb/classes/:classId/marks', handleBatchUpdateMarks);
+app.put('/api/mongodb/classes/:classId/marks', handleBatchUpdateMarks);
+
+// PATCH: Update School Config
+app.patch('/api/mongodb/school-config', async (req: Request, res: Response) => {
+  try {
+    const { client, dbName } = await getMongoClient();
+    const db = client.db(dbName);
+    const configCol = db.collection('school_config');
+    const existingConfig = await configCol.findOne({ _id: 'current_config' as any });
+
+    const merged = {
+      ...(existingConfig || {}),
+      ...req.body,
+      updatedAt: new Date()
+    };
+    await configCol.replaceOne({ _id: 'current_config' as any }, merged, { upsert: true });
+    res.json({ success: true, schoolConfig: merged });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to update school config' });
+  }
+});
+
+// Explicit endpoint to clear marks for a class & term (supports PATCH, POST)
+const handleClearMarks = async (req: Request, res: Response) => {
+  const { classId, term } = req.body;
+  if (!classId || !term) {
+    return res.status(400).json({ success: false, message: 'classId and term required' });
+  }
+
+  try {
+    const { client, dbName } = await getMongoClient();
+    const db = client.db(dbName);
+    const classesCol = db.collection('classes');
+
+    const marksField = term === 'halfYearly' ? 'halfYearlyMarks' : 'quarterlyMarks';
+    await classesCol.updateOne(
+      { id: classId },
+      { 
+        $set: { 
+          [marksField]: {},
+          updatedAt: new Date()
+        } 
+      }
+    );
+
+    res.json({ success: true, message: `Marks cleared for ${classId} (${term})` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to clear marks' });
+  }
+};
+
+app.patch('/api/mongodb/clear-marks', handleClearMarks);
+app.post('/api/mongodb/clear-marks', handleClearMarks);
+
+// Sync data to MongoDB (Push / Cloud Backup with Multi-User Safe Deep Merging)
+app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
+  const { classes, schoolConfig, customUri } = req.body;
 
   if (!classes || !Array.isArray(classes)) {
     return res.status(400).json({
@@ -247,48 +411,70 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
   }
 
   try {
-    const { client, dbName } = await getMongoClient();
-    const db = getDb(client, dbName);
+    const { client, dbName } = await getMongoClient(customUri);
+    const db = client.db(dbName);
 
     const classesCol = db.collection('classes');
     const configCol = db.collection('school_config');
     const historyCol = db.collection('sync_history');
 
-    // Remove any classes that are no longer in the payload
-    const classIds = classes.map((cls: any) => cls.id);
-    await classesCol.deleteMany({ id: { $nin: classIds } });
+    // DO NOT delete previous classes! Instead, deep merge incoming classes with existing classes
+    for (const incomingClass of classes) {
+      if (!incomingClass || !incomingClass.id) continue;
 
-    // Upsert each class record
-    const bulkOps = classes.map((cls: any) => ({
-      replaceOne: {
-        filter: { id: cls.id },
-        replacement: {
-          ...cls,
+      const existing = await classesCol.findOne({ id: incomingClass.id });
+
+      if (!existing) {
+        await classesCol.insertOne({
+          ...incomingClass,
           updatedAt: new Date(),
-        },
-        upsert: true,
-      },
-    }));
+        });
+      } else {
+        // Deep merge students, subjects, and marks so multiple simultaneous users don't overwrite each other
+        const mergedStudents = mergeStudents(existing.students || [], incomingClass.students || []);
+        const mergedSubjects = mergeSubjects(existing.subjects || [], incomingClass.subjects || []);
+        const mergedQuarterlyMarks = mergeMarks(existing.quarterlyMarks || {}, incomingClass.quarterlyMarks || {});
+        const mergedHalfYearlyMarks = mergeMarks(existing.halfYearlyMarks || {}, incomingClass.halfYearlyMarks || {});
 
-    if (bulkOps.length > 0) {
-      await classesCol.bulkWrite(bulkOps);
+        const updatedDoc = {
+          ...existing,
+          ...incomingClass,
+          students: mergedStudents,
+          subjects: mergedSubjects,
+          quarterlyMarks: mergedQuarterlyMarks,
+          halfYearlyMarks: mergedHalfYearlyMarks,
+          updatedAt: new Date(),
+        };
+
+        const { _id, ...cleanDoc } = updatedDoc;
+        await classesCol.replaceOne({ id: incomingClass.id }, cleanDoc, { upsert: true });
+      }
     }
 
-    // Upsert school config
+    // Upsert school config if provided
     if (schoolConfig) {
+      const existingConfig = await configCol.findOne({ _id: 'current_config' as any });
+      const mergedConfig = {
+        ...(existingConfig || {}),
+        ...schoolConfig,
+        updatedAt: new Date(),
+      };
       await configCol.replaceOne(
         { _id: 'current_config' as any },
-        { ...schoolConfig, updatedAt: new Date() },
+        mergedConfig,
         { upsert: true }
       );
     }
 
+    // Fetch all current classes to return the merged state to the client
+    const allClassDocs = await classesCol.find({}).toArray();
+    const cleanedClasses = allClassDocs.map(({ _id, updatedAt, ...rest }) => rest);
+
     // Record audit sync log
-    const totalStudents = classes.reduce((sum: number, c: any) => sum + (c.students?.length || 0), 0);
+    const totalStudents = cleanedClasses.reduce((sum: number, c: any) => sum + (c.students?.length || 0), 0);
     await historyCol.insertOne({
       syncedAt: new Date(),
-      dbName: db.databaseName,
-      totalClasses: classes.length,
+      totalClasses: cleanedClasses.length,
       totalStudents,
       deviceInfo: req.headers['user-agent'] || 'Web Client',
     });
@@ -296,10 +482,10 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
     res.json({
       success: true,
       mode: 'mongodb',
-      dbName: db.databaseName,
-      message: `Successfully saved ${classes.length} classes and ${totalStudents} students!`,
+      message: `Successfully merged and saved ${classes.length} classes to MongoDB Atlas!`,
       syncedAt: new Date().toISOString(),
-      classesCount: classes.length,
+      classes: cleanedClasses,
+      classesCount: cleanedClasses.length,
       studentsCount: totalStudents,
     });
   } catch (err: any) {
@@ -310,11 +496,24 @@ app.post('/api/mongodb/sync', async (req: Request, res: Response) => {
   }
 });
 
-// Pull data from MongoDB (Load / Restore) — always the configured URI.
+// Explicit endpoint to delete a specific class from MongoDB
+app.delete('/api/mongodb/class/:id', async (req: Request, res: Response) => {
+  try {
+    const { client, dbName } = await getMongoClient();
+    const db = client.db(dbName);
+    const classesCol = db.collection('classes');
+    await classesCol.deleteOne({ id: req.params.id });
+    res.json({ success: true, message: `Class ${req.params.id} deleted` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to delete class' });
+  }
+});
+
+// Pull data from MongoDB (Load / Restore)
 app.get('/api/mongodb/pull', async (req: Request, res: Response) => {
   try {
     const { client, dbName } = await getMongoClient();
-    const db = getDb(client, dbName);
+    const db = client.db(dbName);
 
     const classesCol = db.collection('classes');
     const configCol = db.collection('school_config');
@@ -322,17 +521,16 @@ app.get('/api/mongodb/pull', async (req: Request, res: Response) => {
     const classes = await classesCol.find({}).toArray();
     const configDoc = await configCol.findOne({ _id: 'current_config' as any });
 
-    const cleanedClasses = classes.map(({ _id, updatedAt, ...rest }: any) => rest);
+    const cleanedClasses = classes.map(({ _id, updatedAt, ...rest }) => rest);
     let cleanedConfig = null;
     if (configDoc) {
-      const { _id, updatedAt, ...rest } = configDoc as any;
+      const { _id, updatedAt, ...rest } = configDoc;
       cleanedConfig = rest;
     }
 
     res.json({
       success: true,
       source: 'mongodb',
-      dbName: db.databaseName,
       classes: cleanedClasses,
       schoolConfig: cleanedConfig,
       count: cleanedClasses.length,
@@ -353,6 +551,7 @@ app.post('/api/validate', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'classes array is required' });
   }
 
+  // Server-side audit check
   const issues: any[] = [];
   let totalMarks = 0;
   let exceeding = 0;
@@ -381,6 +580,7 @@ app.post('/api/validate', (req: Request, res: Response) => {
       }
     });
 
+    // Check marks
     const checkMarks = (store: any, exam: string) => {
       cls.students?.forEach((st: any) => {
         cls.subjects?.forEach((sub: any) => {
@@ -440,6 +640,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    // Serve static build from dist
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
@@ -448,15 +649,12 @@ async function startServer() {
 
   app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`GradeDesk server running on http://0.0.0.0:${PORT} [${isProduction ? 'production' : 'development'}]`);
-    console.log(`MongoDB target: ${process.env.MONGODB_URI ? '(configured — see MONGODB_URI in .env)' : 'NOT CONFIGURED'}`);
   });
 }
 
-if (!process.env.VERCEL) {
-  startServer().catch((err) => {
-    console.error('Failed to start server:', err);
-    process.exit(1);
-  });
-}
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
 
 export default app;
