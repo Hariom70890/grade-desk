@@ -28,7 +28,7 @@ async function getMongoClient(
     );
   }
 
-  // let dbName = 'grade-desk';
+  let dbName = 'grade-desk';
 
   try {
     const urlObj = new URL(
@@ -39,14 +39,14 @@ async function getMongoClient(
     const pathname = urlObj.pathname.replace(/^\//, '');
 
     if (pathname && !pathname.includes('?')) {
-      // dbName = pathname;
+      dbName = pathname;
     }
   } catch {
     // Use default database name.
   }
 
   if (cachedClient && cachedUri === targetUri) {
-    return { client: cachedClient, dbName:"" };
+    return { client: cachedClient, dbName };
   }
 
   if (cachedClient && cachedUri !== targetUri) {
