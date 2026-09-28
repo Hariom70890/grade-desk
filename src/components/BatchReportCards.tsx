@@ -1,6 +1,6 @@
 import React, {useState} from 'react';
 import {ComputedStudentResult, SchoolConfig, Subject} from '../types';
-import {Printer, X, Award, Grid2X2, FileText, CheckCircle2} from 'lucide-react';
+import {Printer, X, Award, Grid2X2, FileText} from 'lucide-react';
 
 interface BatchReportCardsProps {
   isOpen: boolean;
@@ -19,485 +19,572 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ( {
   subjects,
   examTitle,
 } ) => {
-  const [layoutMode, setLayoutMode] = useState<'quad' | 'full'>( 'quad' ); // 'quad' = 4 cards per A4 page
+  const [layoutMode, setLayoutMode] = useState<'quad' | 'full'>( 'quad' );
 
   if ( !isOpen ) return null;
 
-  // Chunk results into groups of 4 for the 4-per-page A4 layout
   const chunkedResults: ComputedStudentResult[][] = [];
   for ( let i = 0; i < results.length; i += 4 ) {
     chunkedResults.push( results.slice( i, i + 4 ) );
   }
 
-  const totalPages = layoutMode === 'quad' ? chunkedResults.length : results.length;
+  const totalPages =
+    layoutMode === 'quad' ? chunkedResults.length : results.length;
+
+  const getGradeInfo = ( percentage: number ) => {
+    if ( percentage >= 90 ) return {grade: 'A1', remark: 'Outstanding'};
+    if ( percentage >= 80 ) return {grade: 'A2', remark: 'Excellent'};
+    if ( percentage >= 70 ) return {grade: 'B1', remark: 'Very Good'};
+    if ( percentage >= 60 ) return {grade: 'B2', remark: 'Good'};
+    if ( percentage >= 50 ) return {grade: 'C1', remark: 'Above Average'};
+    if ( percentage >= 40 ) return {grade: 'C2', remark: 'Average'};
+    if ( percentage >= 33 ) return {grade: 'D', remark: 'Needs Improvement'};
+    return {grade: 'E', remark: 'Poor'};
+  };
+
+  const getPassMark = ( subject: Subject ) =>
+    subject.passMarks ?? Math.ceil( subject.maxMarks * 0.33 );
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/85 backdrop-blur-xs overflow-y-auto print:bg-white print:overflow-visible">
-      {/* Print styles injected */}
+    <div className="fixed inset-0 z-50 flex flex-col overflow-y-auto bg-slate-950/85 backdrop-blur-sm print:overflow-visible print:bg-white">
       <style>{`
         @media print {
           @page {
             size: A4 portrait;
-            margin: 4mm;
+            margin: 5mm;
           }
+
+          html,
           body {
-            background: #ffffff !important;
-            color: #000000 !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #fff !important;
+            color: #111827 !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
+
           .no-print {
             display: none !important;
           }
+
           .print-full-container {
-            padding: 0 !important;
+            display: block !important;
+            width: 100% !important;
+            max-width: none !important;
             margin: 0 !important;
-            gap: 0 !important;
-            background: white !important;
+            padding: 0 !important;
           }
+
+          .quad-page-wrapper {
+            display: block !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+
           .a4-sheet-quad {
-            width: 100% !important;
-            height: 286mm !important;
-            max-height: 286mm !important;
+            width: 200mm !important;
+            height: 287mm !important;
+            min-height: 0 !important;
+            max-width: none !important;
             display: grid !important;
-            grid-template-columns: repeat(2, 1fr) !important;
-            grid-template-rows: repeat(2, 1fr) !important;
-            gap: 3.5mm !important;
-            page-break-after: always !important;
-            break-after: page !important;
-            box-sizing: border-box !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+            gap: 4mm !important;
             margin: 0 !important;
             padding: 0 !important;
-            border: none !important;
+            border: 0 !important;
+            border-radius: 0 !important;
             box-shadow: none !important;
-          }
-          .a4-sheet-full {
-            width: 100% !important;
-            height: 286mm !important;
-            max-height: 286mm !important;
+            box-sizing: border-box !important;
             page-break-after: always !important;
             break-after: page !important;
-            box-sizing: border-box !important;
-            margin: 0 !important;
-            padding: 6mm !important;
-            border: none !important;
-            box-shadow: none !important;
           }
+
+          .a4-sheet-quad:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
+
           .single-card-quad {
-            box-sizing: border-box !important;
-            border: 1.5px solid #292524 !important;
-            border-radius: 6px !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
             padding: 3mm !important;
-            background: #ffffff !important;
+            border: 1px solid #475569 !important;
+            border-radius: 3mm !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+            break-inside: avoid !important;
             page-break-inside: avoid !important;
+          }
+
+          .quad-school-name {
+            font-size: 14pt !important;
+          }
+
+          .quad-student-name {
+            font-size: 12pt !important;
+          }
+
+          .quad-table {
+            font-size: 8.5pt !important;
+          }
+
+          .quad-table th {
+            font-size: 7.5pt !important;
+          }
+
+          .quad-table td,
+          .quad-table th {
+            padding-top: 1.2mm !important;
+            padding-bottom: 1.2mm !important;
+          }
+
+          .a4-sheet-full {
+            width: 200mm !important;
+            height: 287mm !important;
+            max-width: none !important;
+            margin: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            box-sizing: border-box !important;
+            page-break-after: always !important;
+            break-after: page !important;
+          }
+
+          .a4-sheet-full:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
           }
         }
       `}</style>
 
-      {/* Floating control bar (hidden when printing) */}
-      <div className="no-print sticky top-0 z-50 bg-slate-900/95 text-white px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/80 shadow-2xl backdrop-blur-md">
+      <div className="no-print sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-slate-700 bg-slate-900/95 px-4 py-3 text-white shadow-xl sm:px-6">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
-            <Award className="w-5 h-5" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-400/40 bg-amber-400/15 text-amber-300">
+            <Award className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-sm sm:text-base font-extrabold flex items-center gap-2">
-              Batch Report Cards Preview ({results.length} Students)
+            <h2 className="text-sm font-extrabold sm:text-base">
+              Report Cards · {results.length} Students
             </h2>
             <p className="text-[11px] text-slate-400">
-              {examTitle} • {schoolConfig.className} - {schoolConfig.section} • {totalPages} A4 Page{totalPages > 1 ? 's' : ''}
+              {examTitle} · {schoolConfig.className} - {schoolConfig.section} ·{' '}
+              {totalPages} page{totalPages === 1 ? '' : 's'}
             </p>
           </div>
         </div>
 
-        {/* Layout Mode Selector (4 per A4 page vs 1 per page) */}
-        <div className="flex items-center gap-2">
-          <div className="bg-slate-800 p-1 rounded-xl flex items-center border border-slate-700 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-xl border border-slate-700 bg-slate-800 p-1 text-xs">
             <button
               onClick={() => setLayoutMode( 'quad' )}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${layoutMode === 'quad'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-2 font-bold transition ${layoutMode === 'quad'
+                  ? 'bg-amber-400 text-slate-950'
+                  : 'text-slate-300 hover:bg-slate-700 hover:text-white'
                 }`}
-              title="Prints 4 cards on each A4 page (2x2 grid)"
+              title="Print four cards on each A4 page"
             >
-              <Grid2X2 className="w-3.5 h-3.5" />
-              <span>4 Cards / A4 Page</span>
+              <Grid2X2 className="h-4 w-4" />
+              <span>4 Cards / Page</span>
             </button>
             <button
               onClick={() => setLayoutMode( 'full' )}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${layoutMode === 'full'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-2 font-bold transition ${layoutMode === 'full'
+                  ? 'bg-amber-400 text-slate-950'
+                  : 'text-slate-300 hover:bg-slate-700 hover:text-white'
                 }`}
-              title="Prints 1 large full-page card per student"
+              title="Print one card per A4 page"
             >
-              <FileText className="w-3.5 h-3.5" />
+              <FileText className="h-4 w-4" />
               <span>1 Card / Page</span>
             </button>
           </div>
 
           <button
             onClick={() => window.print()}
-            className="flex items-center gap-2 px-4 sm:px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs sm:text-sm shadow-lg shadow-amber-500/25 transition-all hover:scale-102"
+            className="flex items-center gap-2 rounded-xl bg-amber-400 px-4 py-2.5 text-xs font-extrabold text-slate-950 transition hover:bg-amber-300 sm:text-sm"
           >
-            <Printer className="w-4 h-4" /> Print {layoutMode === 'quad' ? '4-on-A4' : 'All'} ({totalPages} Pages)
+            <Printer className="h-4 w-4" />
+            Print · {totalPages} Page{totalPages === 1 ? '' : 's'}
           </button>
 
           <button
             onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-            title="Close Preview"
+            className="rounded-xl bg-slate-800 p-2.5 text-slate-300 transition hover:bg-slate-700 hover:text-white"
+            title="Close preview"
           >
-            <X className="w-5 h-5" />
+            <X className="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      {/* Main Preview Container */}
-      <div className="print-full-container p-3 sm:p-8 flex flex-col items-center gap-8 w-full max-w-6xl mx-auto">
-        {layoutMode === 'quad' ? (
-          // ==========================================
-          // 4 CARDS PER A4 PAGE (2x2 GRID FORMAT)
-          // ==========================================
-          chunkedResults.map( ( pageGroup, pageIndex ) => (
-            <div key={`page-${pageIndex}`} className="flex flex-col items-center w-full">
-              {/* Screen indicator for page number */}
-              <div className="no-print text-xs font-bold text-slate-400 mb-2 flex items-center gap-2">
-                <span>A4 Sheet #{pageIndex + 1} of {chunkedResults.length}</span>
-                <span className="text-slate-600">•</span>
-                <span className="text-amber-400">Contains {pageGroup.length} Cards (2x2 Grid)</span>
+      <div className="print-full-container mx-auto flex w-full max-w-6xl flex-col items-center gap-8 p-3 sm:p-8">
+        {layoutMode === 'quad'
+          ? chunkedResults.map( ( pageGroup, pageIndex ) => (
+            <div
+              key={`page-${pageIndex}`}
+              className="quad-page-wrapper flex w-full flex-col items-center"
+            >
+              <div className="no-print mb-2 text-xs font-bold text-slate-400">
+                A4 Sheet {pageIndex + 1} of {chunkedResults.length}
               </div>
 
-              {/* Physical A4 Sheet Container */}
-              <div className="a4-sheet-quad bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-300 w-full max-w-[850px] min-h-[1100px] p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 grid-rows-2 gap-3.5 box-border">
+              <div className="a4-sheet-quad grid min-h-[1100px] w-full max-w-[850px] grid-cols-1 grid-rows-2 gap-3.5 rounded-xl border border-slate-300 bg-white p-4 text-slate-900 shadow-2xl sm:grid-cols-2 sm:p-5">
                 {pageGroup.map( ( result ) => {
-                  const gradeInfo =
-                    result.percentage >= 90
-                      ? {grade: 'A1', remark: 'Outstanding'}
-                      : result.percentage >= 80
-                        ? {grade: 'A2', remark: 'Excellent'}
-                        : result.percentage >= 70
-                          ? {grade: 'B1', remark: 'Very Good'}
-                          : result.percentage >= 60
-                            ? {grade: 'B2', remark: 'Good'}
-                            : result.percentage >= 50
-                              ? {grade: 'C1', remark: 'Above Average'}
-                              : result.percentage >= 40
-                                ? {grade: 'C2', remark: 'Average'}
-                                : result.percentage >= 33
-                                  ? {grade: 'D', remark: 'Needs Improvement'}
-                                  : {grade: 'E', remark: 'Poor'};
-                  // console.log( "result:-", result );
-                  return (
-                    <div
-                      key={result.student.id}
-                      className="single-card-quad bg-white border-2 border-stone-800 rounded-lg p-2.5 sm:p-3 flex flex-col justify-between relative overflow-hidden shadow-xs"
-                    >
-                      {/* Inner ornate border accent */}
-                      <div className="absolute inset-0.5 border border-dashed border-stone-300 pointer-events-none rounded-md" />
+                  const gradeInfo = getGradeInfo( Number( result.percentage ) || 0 );
 
-                      {/* Card Header: School info & Exam Title */}
-                      <div className="text-center relative z-10 pb-1.5 border-b border-stone-300">
-                        <h3 className="font-extrabold text-[14px] sm:text-[12px] uppercase text-stone-900 tracking-tight leading-tight">
+                  return (
+                    <article
+                      key={result.student.id}
+                      className="single-card-quad relative flex min-h-0 flex-col overflow-hidden rounded-xl border-2 border-slate-700 bg-white p-3 shadow-sm"
+                    >
+                      <div className="pointer-events-none absolute inset-1.5 rounded-lg border border-dashed border-slate-200" />
+
+                      <header className="relative z-10 border-b-2 border-amber-400 pb-2 text-center"> 
+                        <h3 className="quad-school-name text-[16px] font-black uppercase leading-tight tracking-wide text-slate-900">
                           {schoolConfig.schoolName}
                         </h3>
-                        <p className="text-[12px] text-stone-600 font-medium leading-none mt-0.5 truncate">
-                          {/* {schoolConfig.schoolSubtitle} */}
-                        </p>
-                        <div className="mt-1 inline-block bg-amber-100 text-stone-900 px-2 py-0.5 rounded text-[12px] sm:text-[9px] font-black uppercase tracking-wider border border-amber-300">
+                        
+                        <span className="mt-1.5 inline-block rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wider text-amber-900">
                           {examTitle}
-                        </div>
-                      </div>
+                        </span>
+                      </header>
 
-                      {/* Student Details Grid */}
-                      <div className="grid grid-cols-2 gap-x-2 gap-y-1 bg-amber-50/40 p-1.5 rounded border border-amber-200/80 my-1.5 text-[9px] relative z-10">
-                        <div className="truncate">
-                          <span className="text-stone-500 text-[12px] block leading-none">Student Name</span>
-                          <span className="font-black text-stone-900 text-[16px] leading-tight truncate block">
+                      <section className="relative z-10 my-2 grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
+                        <div className="min-w-0">
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                            Student Name
+                          </span>
+                          <span className="quad-student-name block truncate text-[13px] font-extrabold leading-tight text-slate-900">
                             {result.student.name}
                           </span>
                         </div>
-                        <div>
-                          <span className="text-stone-500 text-[12px] block leading-none">Roll No</span>
-                          <span className="font-bold text-stone-800 text-[16px] leading-tight">
+                        <div className="min-w-0">
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                            Roll Number
+                          </span>
+                          <span className="block truncate text-[11px] font-bold text-slate-800">
                             {result.student.rollNo || `#${result.student.sNo}`}
                           </span>
                         </div>
-                        <div>
-                          <span className="text-stone-500 text-[12px] block leading-none">Class & Sec</span>
-                          <span className="font-bold text-stone-800 text-[9px] leading-tight">
+                        <div className="col-span-2">
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                            Class & Section
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-800">
                             {schoolConfig.className} - {schoolConfig.section}
                           </span>
                         </div>
-                      </div>
+                      </section>
 
-                      {/* Compact Marks Table */}
-                      <div className="relative z-10 flex-1 my-1 ">
-                        <table className="w-full text-left text-[8.5px] border border-stone-300 rounded overflow-hidden">
+                      <div className="relative z-10 min-h-0 flex-1">
+                        <table className="quad-table w-full table-fixed border-collapse overflow-hidden rounded-lg border border-slate-300 text-left text-[9px]">
                           <thead>
-                            <tr className="bg-stone-100 text-stone-900 border-b border-stone-300 font-black uppercase text-[12px]">
-                              <th className="py-0.5 px-1.5">Subject</th>
-                              <th className="py-0.5 px-1 text-center">Max</th>
-                              <th className="py-0.5 px-1 text-center">Pass</th>
-                              <th className="py-0.5 px-1 text-center">Obt.</th>
-                              <th className="py-0.5 px-1 text-center">Status</th>
+                            <tr className="bg-slate-800 text-[8px] font-extrabold uppercase text-white">
+                              <th className="w-[38%] px-1.5 py-1.5">Subject</th>
+                              <th className="w-[13%] px-1 py-1.5 text-center">Max</th>
+                              <th className="w-[13%] px-1 py-1.5 text-center">Pass</th>
+                              <th className="w-[15%] px-1 py-1.5 text-center">Obt.</th>
+                              <th className="w-[21%] px-1 py-1.5 text-center">Status</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-stone-200 text-[12px]">
-                            {subjects.map( ( sub, i ) => {
-                              const mark = result.marks[sub.id];
+                          <tbody className="divide-y divide-slate-200 text-slate-800">
+                            {subjects.map( ( subject, index ) => {
+                              const mark = result.marks[subject.id];
                               const hasMark = mark !== undefined && mark !== null;
-                              const passMark = sub.passMarks ?? Math.ceil( sub.maxMarks * 0.33 );
-                              const isPass = hasMark && Number( mark ) >= passMark;
+                              const passMark = getPassMark( subject );
+                              const isPass =
+                                hasMark && Number( mark ) >= passMark;
 
                               return (
-                                <tr key={sub.id} className={i % 2 === 0 ? 'bg-white' : 'bg-stone-50/60'}>
-                                  <td className="py-0.5 px-1.5 font-bold text-stone-900 truncate max-w-[90px]">
-                                    {sub.name}
+                                <tr
+                                  key={subject.id}
+                                  className={
+                                    index % 2 === 0 ? 'bg-white' : 'bg-slate-50'
+                                  }
+                                >
+                                  <td className="truncate px-1.5 py-1 font-semibold">
+                                    {subject.name}
                                   </td>
-                                  <td className="py-0.5 px-1 text-center text-stone-600 font-medium">{sub.maxMarks}</td>
-                                  <td className="py-0.5 px-1 text-center text-stone-500">{passMark}</td>
-                                  <td className="py-0.5 px-1 text-center font-black text-stone-900">
-                                    {hasMark ? mark : '--'}
+                                  <td className="px-1 py-1 text-center">
+                                    {subject.maxMarks}
                                   </td>
-                                  <td className="py-0.5 px-1 text-center font-bold">
+                                  <td className="px-1 py-1 text-center">
+                                    {passMark}
+                                  </td>
+                                  <td className="px-1 py-1 text-center font-extrabold">
+                                    {hasMark ? mark : '—'}
+                                  </td>
+                                  <td className="px-1 py-1 text-center text-[8px] font-extrabold">
                                     {hasMark ? (
-                                      isPass ? (
-                                        <span className="text-emerald-700 text-[7.5px]">PASS</span>
-                                      ) : (
-                                        <span className="text-rose-600 text-[7.5px]">FAIL</span>
-                                      )
+                                      <span
+                                        className={
+                                          isPass
+                                            ? 'text-emerald-700'
+                                            : 'text-rose-600'
+                                        }
+                                      >
+                                        {isPass ? 'PASS' : 'FAIL'}
+                                      </span>
                                     ) : (
-                                      <span className="text-stone-400">--</span>
+                                      <span className="text-slate-400">—</span>
                                     )}
                                   </td>
                                 </tr>
                               );
                             } )}
-                            {/* Grand Total Row */}
-                            <tr className="bg-amber-100/90 font-black text-stone-900 border-t-2 border-stone-400">
-                              <td className="py-1 px-1.5 uppercase text-[8.5px]">Total</td>
-                              <td className="py-1 px-1 text-center">{result.totalMax}</td>
-                              <td className="py-1 px-1 text-center">--</td>
-                              <td className="py-1 px-1 text-center font-black text-stone-950 text-[9.5px]">
+                            <tr className="border-t-2 border-amber-400 bg-amber-100 font-extrabold text-slate-900">
+                              <td className="px-1.5 py-1.5 uppercase">Total</td>
+                              <td className="px-1 py-1.5 text-center">
+                                {result.totalMax}
+                              </td>
+                              <td className="px-1 py-1.5 text-center">—</td>
+                              <td className="px-1 py-1.5 text-center">
                                 {result.totalObtained}
                               </td>
-                              <td className="py-1 px-1 text-center text-[12px] font-bold text-emerald-800">
+                              <td className="px-1 py-1.5 text-center text-amber-900">
                                 {result.percentage}%
                               </td>
                             </tr>
                           </tbody>
                         </table>
-
                       </div>
 
-
-                      {/* Rank, Grade & Remark Summary */}
-                      <div className="grid grid-cols-3 gap-1 bg-stone-50 border border-stone-200 rounded p-1 text-center my-1 relative z-10 text-[12px]">
+                      <section className="relative z-10 my-2 grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-2 text-center">
                         <div>
-                          <span className="text-stone-500 block  leading-tight">Rank</span>
-                          <span className="font-extrabold text-amber-700  leading-tight">
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                            Rank
+                          </span>
+                          <span className="text-[12px] font-black text-amber-700">
                             #{result.rank}
                           </span>
                         </div>
                         <div>
-                          <span className="text-stone-500 block leading-tight">Grade</span>
-                          <span className="font-extrabold text-stone-800 leading-tight">
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                            Grade
+                          </span>
+                          <span className="text-[12px] font-black text-slate-800">
                             {gradeInfo.grade}
                           </span>
                         </div>
-                        <div className="truncate">
-                          <span className="text-stone-500 block  leading-tight">Remark</span>
-                          <span className="font-bold text-stone-700 text-[12px] leading-tight truncate block">
+                        <div className="min-w-0">
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                            Result
+                          </span>
+                          <span className="block truncate text-[10px] font-bold text-slate-700">
                             {gradeInfo.remark}
                           </span>
                         </div>
-                      </div>
+                      </section>
 
-                      {/* Signatures */}
-                      <div className="pt-5 pb-2 border-t border-dashed border-stone-300 grid grid-cols-2 gap-2 text-center text-[12px] text-stone-600 relative z-10 mt-auto">
+                      <footer className="relative z-10  mt-auto grid grid-cols-2 justify-end gap-5 border-t border-dashed border-slate-300 pt-2 text-center text-[8px] font-semibold text-slate-600">
+                        <div></div>
                         <div>
-                          <div className="h-4  border-stone-400 mb-0.5"></div>
-                          {/* <span className="font-bold">Principal</span> */}
+                          <div className="mb-1 h-5 border-b border-slate-400" />
+                          Class Teacher
                         </div>
-                        <div>
-                          <div className="h-6 border-b border-stone-400 mb-0.5"></div>
-                          <span className="font-bold">Class Teacher</span>
-                        </div>
-                      </div>
-                    </div>
+                      </footer>
+                    </article>
                   );
                 } )}
 
-                {/* If page has less than 4 cards, fill remaining slots with empty layout so A4 grid doesn't stretch */}
-                {Array.from( {length: 4 - pageGroup.length} ).map( ( _, emptyIdx ) => (
+                {Array.from( {length: 4 - pageGroup.length} ).map( ( _, index ) => (
                   <div
-                    key={`empty-${emptyIdx}`}
-                    className="single-card-quad border-2 border-dashed border-stone-200 rounded-lg p-3 flex items-center justify-center text-stone-300 text-xs font-semibold print:opacity-0"
+                    key={`empty-${index}`}
+                    className="single-card-quad flex items-center justify-center rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-300 print:invisible"
                   >
-                    Blank Slot
+                    Blank
                   </div>
                 ) )}
               </div>
             </div>
           ) )
-        ) : (
-          // ==========================================
-          // 1 FULL PAGE PER STUDENT (STANDARD FORMAT)
-          // ==========================================
-          results.map( ( result ) => {
+          : results.map( ( result ) => {
             const attendanceDays = result.student.attendanceDays ?? 90;
             const totalDays = result.student.totalWorkingDays ?? 92;
-            const attendancePercent = ( ( attendanceDays / totalDays ) * 100 ).toFixed( 1 );
+            const attendancePercent =
+              totalDays > 0
+                ? ( ( attendanceDays / totalDays ) * 100 ).toFixed( 1 )
+                : '0.0';
 
             return (
-              <div
+              <article
                 key={result.student.id}
-                className="a4-sheet-full bg-white text-slate-900 rounded-2xl shadow-xl border border-slate-200 max-w-4xl w-full p-8 sm:p-10"
+                className="a4-sheet-full w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-8 text-slate-900 shadow-xl sm:p-10"
               >
-                {/* School Header */}
-                <div className="text-center pb-5 border-b-2 border-amber-600/40">
-                  <div className="flex items-center justify-center gap-3 mb-1">
-                    <div className="w-12 h-12 rounded-full bg-amber-100 border-2 border-amber-500 flex items-center justify-center text-amber-700">
-                      <Award className="w-7 h-7" />
+                <header className="border-b-2 border-amber-500 pb-5 text-center">
+                  <div className="mb-2 flex items-center justify-center gap-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-amber-400 bg-amber-100 text-amber-700">
+                      <Award className="h-7 w-7" />
                     </div>
                     <div>
-                      <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 uppercase">
+                      <h1 className="text-2xl font-black uppercase tracking-tight">
                         {schoolConfig.schoolName}
                       </h1>
-                      <p className="text-xs text-slate-600 font-medium">
+                      <p className="text-xs font-medium text-slate-600">
                         {schoolConfig.schoolSubtitle}
                       </p>
                     </div>
                   </div>
+                  <span className="inline-block rounded-full bg-amber-400 px-4 py-1 text-xs font-extrabold uppercase tracking-wide text-slate-950">
+                    {examTitle} · Session {schoolConfig.academicYear}
+                  </span>
+                </header>
 
-                  <div className="mt-2 inline-block bg-amber-500 text-slate-950 px-4 py-0.5 rounded-full text-xs font-black tracking-wider uppercase">
-                    {examTitle} • SESSION {schoolConfig.academicYear}
+                <section className="my-4 grid grid-cols-4 gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs">
+                  <div>
+                    <span className="block font-semibold text-slate-500">
+                      Student Name
+                    </span>
+                    <span className="font-extrabold">{result.student.name}</span>
                   </div>
-                </div>
+                  <div>
+                    <span className="block font-semibold text-slate-500">
+                      Roll Number
+                    </span>
+                    <span className="font-bold">
+                      {result.student.rollNo || `#${result.student.sNo}`}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block font-semibold text-slate-500">
+                      Class & Section
+                    </span>
+                    <span className="font-bold">
+                      {schoolConfig.className} - {schoolConfig.section}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block font-semibold text-slate-500">
+                      Attendance
+                    </span>
+                    <span className="font-bold">
+                      {attendanceDays}/{totalDays} ({attendancePercent}%)
+                    </span>
+                  </div>
+                </section>
 
-                {/* Student info */}
-                <div className="grid grid-cols-4 gap-3 bg-amber-50/50 p-3 rounded-xl border border-amber-200 my-4 text-xs">
-                  <div>
-                    <span className="text-slate-500 text-[16px] block font-semibold">Student Name</span>
-                    <span className="font-extrabold text-slate-900">{result.student.name}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 text-[16px] block font-semibold">Roll No</span>
-                    <span className="font-bold text-slate-800">{result.student.rollNo || `#${result.student.sNo}`}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 text-[16px] block font-semibold">Class & Section</span>
-                    <span className="font-bold text-slate-800">{schoolConfig.className} - {schoolConfig.section}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 text-[16px] block font-semibold">Attendance</span>
-                    <span className="font-bold text-slate-800">{attendanceDays}/{totalDays} ({attendancePercent}%)</span>
-                  </div>
-                </div>
-
-                {/* Subject Marks Table */}
-                <table className="w-full text-left text-xs border border-slate-300 rounded-lg overflow-hidden my-4">
+                <table className="my-4 w-full overflow-hidden rounded-lg border border-slate-300 text-left text-xs">
                   <thead>
-                    <tr className="bg-amber-100 text-slate-900 border-b border-slate-300 font-bold uppercase text-[16px]">
-                      <th className="py-2 px-3 text-center">#</th>
-                      <th className="py-2 px-4">Subject</th>
-                      <th className="py-2 px-3 text-center">Max Marks</th>
-                      <th className="py-2 px-3 text-center">Pass Marks</th>
-                      <th className="py-2 px-3 text-center">Marks Obtained</th>
-                      <th className="py-2 px-3 text-center">Percentage</th>
-                      <th className="py-2 px-3 text-center">Status</th>
+                    <tr className="bg-slate-800 text-[11px] font-bold uppercase text-white">
+                      <th className="px-3 py-2 text-center">#</th>
+                      <th className="px-4 py-2">Subject</th>
+                      <th className="px-3 py-2 text-center">Max Marks</th>
+                      <th className="px-3 py-2 text-center">Pass Marks</th>
+                      <th className="px-3 py-2 text-center">Obtained</th>
+                      <th className="px-3 py-2 text-center">Percentage</th>
+                      <th className="px-3 py-2 text-center">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {subjects.map( ( sub, i ) => {
-                      const mark = result.marks[sub.id];
+                    {subjects.map( ( subject, index ) => {
+                      const mark = result.marks[subject.id];
                       const hasMark = mark !== undefined && mark !== null;
-                      const passMark = sub.passMarks ?? Math.ceil( sub.maxMarks * 0.33 );
+                      const passMark = getPassMark( subject );
                       const isPass = hasMark && Number( mark ) >= passMark;
-                      const subPct = hasMark ? ( ( Number( mark ) / sub.maxMarks ) * 100 ).toFixed( 1 ) : '-';
+                      const subjectPercentage = hasMark
+                        ? ( ( Number( mark ) / subject.maxMarks ) * 100 ).toFixed( 1 )
+                        : '--';
 
                       return (
-                        <tr key={sub.id} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
-                          <td className="py-2 px-3 text-center text-slate-500">{i + 1}</td>
-                          <td className="py-2 px-4 font-bold text-slate-900">{sub.name}</td>
-                          <td className="py-2 px-3 text-center text-slate-600">{sub.maxMarks}</td>
-                          <td className="py-2 px-3 text-center text-slate-500">{passMark}</td>
-                          <td className="py-2 px-3 text-center font-bold text-slate-900">
-                            {hasMark ? mark : '--'}
+                        <tr
+                          key={subject.id}
+                          className={index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}
+                        >
+                          <td className="px-3 py-2 text-center text-slate-500">
+                            {index + 1}
                           </td>
-                          <td className="py-2 px-3 text-center font-medium text-slate-700">
-                            {hasMark ? `${subPct}%` : '--'}
+                          <td className="px-4 py-2 font-bold">{subject.name}</td>
+                          <td className="px-3 py-2 text-center">
+                            {subject.maxMarks}
                           </td>
-                          <td className="py-2 px-3 text-center">
+                          <td className="px-3 py-2 text-center">{passMark}</td>
+                          <td className="px-3 py-2 text-center font-bold">
+                            {hasMark ? mark : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {hasMark ? `${subjectPercentage}%` : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-center">
                             {hasMark ? (
-                              isPass ? (
-                                <span className="text-[16px] font-bold text-emerald-700">PASS</span>
-                              ) : (
-                                <span className="text-[16px] font-bold text-red-600">NEEDS WORK</span>
-                              )
+                              <span
+                                className={
+                                  isPass
+                                    ? 'font-bold text-emerald-700'
+                                    : 'font-bold text-rose-600'
+                                }
+                              >
+                                {isPass ? 'PASS' : 'NEEDS WORK'}
+                              </span>
                             ) : (
-                              <span className="text-slate-400">--</span>
+                              <span className="text-slate-400">—</span>
                             )}
                           </td>
                         </tr>
                       );
                     } )}
-                    <tr className="bg-amber-100 font-extrabold text-slate-900">
-                      <td colSpan={2} className="py-2 px-4 uppercase text-xs">Grand Total</td>
-                      <td className="py-2 px-3 text-center text-xs">{result.totalMax}</td>
-                      <td className="py-2 px-3 text-center text-xs">{Math.ceil( result.totalMax * 0.33 )}</td>
-                      <td className="py-2 px-3 text-center text-sm font-black text-amber-950">{result.totalObtained}</td>
-                      <td className="py-2 px-3 text-center text-sm font-black text-amber-950">{result.percentage}%</td>
-                      <td className="py-2 px-3 text-center text-xs">
-                        {result.isPassed ? (
-                          <span className="text-emerald-800 font-bold">PASSED</span>
-                        ) : (
-                          <span className="text-red-700 font-bold">NEEDS ATTENTION</span>
-                        )}
+                    <tr className="bg-amber-100 font-extrabold">
+                      <td colSpan={2} className="px-4 py-2 uppercase">
+                        Grand Total
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {result.totalMax}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {Math.ceil( result.totalMax * 0.33 )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {result.totalObtained}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {result.percentage}%
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {result.isPassed ? 'PASSED' : 'NEEDS ATTENTION'}
                       </td>
                     </tr>
                   </tbody>
                 </table>
 
-                {/* Bottom Result summary */}
-                <div className="grid grid-cols-3 gap-3 my-4 text-center text-xs">
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
-                    <span className="text-[16px] text-slate-500 block">Class Standing</span>
-                    <span className="font-extrabold text-amber-600 text-lg">Rank #{result.rank}</span>
+                <section className="my-4 grid grid-cols-3 gap-3 text-center text-xs">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <span className="block text-slate-500">Class Standing</span>
+                    <span className="text-lg font-extrabold text-amber-700">
+                      Rank #{result.rank}
+                    </span>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
-                    <span className="text-[16px] text-slate-500 block">Grade</span>
-                    <span className="font-extrabold text-slate-800 text-lg">Grade {result.grade}</span>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <span className="block text-slate-500">Grade</span>
+                    <span className="text-lg font-extrabold">
+                      Grade {result.grade}
+                    </span>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2">
-                    <span className="text-[16px] text-slate-500 block">Teacher Remark</span>
-                    <span className="font-bold text-amber-900 text-xs px-2 py-0.5 bg-amber-100 rounded-full inline-block mt-1">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <span className="block text-slate-500">Teacher Remark</span>
+                    <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-1 font-bold text-amber-900">
                       {result.remark}
                     </span>
                   </div>
-                </div>
+                </section>
 
-                {/* Signatures */}
-                <div className="pt-6 border-t border-slate-300 grid grid-cols-3 gap-4 text-center text-xs text-slate-700">
-                  <div>
-                    <div className="h-8 border-b border-dashed border-slate-400 mb-1"></div>
-                    <span className="font-semibold text-[11px]">Class Teacher</span>
-                  </div>
-                  <div>
-                    <div className="h-8 border-b border-dashed border-slate-400 mb-1"></div>
-                    <span className="font-semibold text-[11px]">Exam Controller</span>
-                  </div>
-                  <div>
-                    <div className="h-8 border-b border-dashed border-slate-400 mb-1"></div>
-                    <span className="font-semibold text-[11px]">Principal</span>
-                  </div>
-                </div>
-              </div>
+                <footer className="grid grid-cols-3 gap-4 border-t border-slate-300 pt-6 text-center text-xs text-slate-700">
+                  {['Class Teacher', 'Exam Controller', 'Principal'].map(
+                    ( label ) => (
+                      <div key={label}>
+                        <div className="mb-1 h-8 border-b border-dashed border-slate-400" />
+                        <span className="font-semibold">{label}</span>
+                      </div>
+                    ),
+                  )}
+                </footer>
+              </article>
             );
-          } )
-        )}
+          } )}
       </div>
     </div>
   );
