@@ -1,18 +1,18 @@
-import React, { useState, useRef, useMemo } from 'react';
-import { Subject, Student, ComputedStudentResult, SchoolConfig } from '../types';
-import { exportTabulationToExcel, exportTabulationToCSV } from '../utils/exportUtils';
-import { 
-  FileText, 
-  Download, 
-  Printer, 
-  Plus, 
-  Trash2, 
-  Edit3, 
-  Check, 
-  AlertCircle, 
-  Sparkles, 
-  Zap, 
-  Table, 
+import React, {useState, useRef, useMemo} from 'react';
+import {Subject, Student, ComputedStudentResult, SchoolConfig} from '../types';
+import {exportTabulationToExcel, exportTabulationToCSV} from '../utils/exportUtils';
+import {
+  FileText,
+  Download,
+  Printer,
+  Plus,
+  Trash2,
+  Edit3,
+  Check,
+  AlertCircle,
+  Sparkles,
+  Zap,
+  Table,
   LayoutGrid,
   ArrowUp,
   ArrowDown,
@@ -33,22 +33,23 @@ interface TabulationSheetProps {
   students: Student[];
   results: ComputedStudentResult[];
   marksMap: Record<string, Record<string, number | null>>;
-  onUpdateMark: (studentId: string, subjectId: string, mark: number | null) => void;
-  onAddStudent: (name: string, rollNo: string) => void;
-  onDeleteStudent: (studentId: string) => void;
-  onUpdateStudent: (studentId: string, name: string, rollNo: string) => void;
-  onOpenReportCard: (studentId: string) => void;
+  onUpdateMark: ( studentId: string, subjectId: string, mark: number | null ) => void;
+  onBatchUpdateMarks?: ( updates: {studentId: string; subjectId: string; mark: number | null;}[] ) => void;
+  onAddStudent: ( name: string, rollNo: string ) => void;
+  onDeleteStudent: ( studentId: string ) => void;
+  onUpdateStudent: ( studentId: string, name: string, rollNo: string ) => void;
+  onOpenReportCard: ( studentId: string ) => void;
   onOpenRapidEntry: () => void;
   onFillSampleMarks: () => void;
   onClearMarks: () => void;
-  onMoveRowUp: (studentIndex: number) => void;
-  onMoveRowDown: (studentIndex: number) => void;
-  onReorderStudents: (newStudents: Student[]) => void;
-  onInsertRowAt?: (index: number, name: string, rollNo: string) => void;
+  onMoveRowUp: ( studentIndex: number ) => void;
+  onMoveRowDown: ( studentIndex: number ) => void;
+  onReorderStudents: ( newStudents: Student[] ) => void;
+  onInsertRowAt?: ( index: number, name: string, rollNo: string ) => void;
   onOpenRegisterPrint?: () => void;
 }
 
-export const TabulationSheet: React.FC<TabulationSheetProps> = ({
+export const TabulationSheet: React.FC<TabulationSheetProps> = ( {
   examTitle,
   schoolConfig,
   subjects,
@@ -56,6 +57,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
   results,
   marksMap,
   onUpdateMark,
+  onBatchUpdateMarks,
   onAddStudent,
   onDeleteStudent,
   onUpdateStudent,
@@ -68,112 +70,113 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
   onReorderStudents,
   onInsertRowAt,
   onOpenRegisterPrint,
-}) => {
-  const [viewMode, setViewMode] = useState<'classic' | 'modern'>('classic');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
+} ) => {
+  const [viewMode, setViewMode] = useState<'classic' | 'modern'>( 'modern' );
+  const [searchQuery, setSearchQuery] = useState( '' );
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>( new Set() );
 
   // Editing state
-  const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editRoll, setEditRoll] = useState('');
+  const [editingStudentId, setEditingStudentId] = useState<string | null>( null );
+  const [editName, setEditName] = useState( '' );
+  const [editRoll, setEditRoll] = useState( '' );
 
   // Add row prompt
-  const [showAddRow, setShowAddRow] = useState(false);
-  const [insertAfterIndex, setInsertAfterIndex] = useState<number | null>(null);
-  const [newStudentName, setNewStudentName] = useState('');
-  const [newStudentRoll, setNewStudentRoll] = useState('');
-  const [errorCell, setErrorCell] = useState<{ studentId: string; subjectId: string; message: string } | null>(null);
+  const [showAddRow, setShowAddRow] = useState( false );
+  const [insertAfterIndex, setInsertAfterIndex] = useState<number | null>( null );
+  const [newStudentName, setNewStudentName] = useState( '' );
+  const [newStudentRoll, setNewStudentRoll] = useState( '' );
+  const [errorCell, setErrorCell] = useState<{studentId: string; subjectId: string; message: string;} | null>( null );
+  const [pasteToast, setPasteToast] = useState<string | null>( null );
 
   // Sorting state
-  const [sortField, setSortField] = useState<'default' | 'rollNo' | 'name' | 'total' | 'rank'>('default');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [sortField, setSortField] = useState<'default' | 'rollNo' | 'name' | 'total' | 'rank'>( 'default' );
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>( 'asc' );
 
-  const totalMaxMarks = subjects.reduce((sum, s) => sum + s.maxMarks, 0);
+  const totalMaxMarks = subjects.reduce( ( sum, s ) => sum + s.maxMarks, 0 );
 
   // Keyboard navigation map
-  const cellRefs = useRef<Map<string, HTMLInputElement>>(new Map());
-  const getCellKey = (studentIndex: number, subjectIndex: number) => `${studentIndex}-${subjectIndex}`;
+  const cellRefs = useRef<Map<string, HTMLInputElement>>( new Map() );
+  const getCellKey = ( studentIndex: number, subjectIndex: number ) => `${studentIndex}-${subjectIndex}`;
 
   // Filtered and sorted results
-  const displayedResults = useMemo(() => {
+  const displayedResults = useMemo( () => {
     let list = [...results];
 
     // Filter by search query
-    if (searchQuery.trim()) {
+    if ( searchQuery.trim() ) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter(
-        (r) =>
-          r.student.name.toLowerCase().includes(q) ||
-          r.student.rollNo.toLowerCase().includes(q)
+        ( r ) =>
+          r.student.name.toLowerCase().includes( q ) ||
+          r.student.rollNo.toLowerCase().includes( q )
       );
     }
 
     // Sort if selected
-    if (sortField !== 'default') {
-      list.sort((a, b) => {
+    if ( sortField !== 'default' ) {
+      list.sort( ( a, b ) => {
         let valA: string | number = 0;
         let valB: string | number = 0;
 
-        if (sortField === 'rollNo') {
-          valA = Number(a.student.rollNo) || a.student.rollNo;
-          valB = Number(b.student.rollNo) || b.student.rollNo;
-        } else if (sortField === 'name') {
+        if ( sortField === 'rollNo' ) {
+          valA = Number( a.student.rollNo ) || a.student.rollNo;
+          valB = Number( b.student.rollNo ) || b.student.rollNo;
+        } else if ( sortField === 'name' ) {
           valA = a.student.name.toLowerCase();
           valB = b.student.name.toLowerCase();
-        } else if (sortField === 'total') {
+        } else if ( sortField === 'total' ) {
           valA = a.totalObtained;
           valB = b.totalObtained;
-        } else if (sortField === 'rank') {
+        } else if ( sortField === 'rank' ) {
           valA = a.rank;
           valB = b.rank;
         }
 
-        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+        if ( valA < valB ) return sortDirection === 'asc' ? -1 : 1;
+        if ( valA > valB ) return sortDirection === 'asc' ? 1 : -1;
         return 0;
-      });
+      } );
     }
 
     return list;
-  }, [results, searchQuery, sortField, sortDirection]);
+  }, [results, searchQuery, sortField, sortDirection] );
 
   // Apply current sorting permanently to the student order
   const handleApplySortPermanently = () => {
-    const reorderedStudents = displayedResults.map((r, idx) => ({
+    const reorderedStudents = displayedResults.map( ( r, idx ) => ( {
       ...r.student,
       sNo: idx + 1,
-    }));
-    onReorderStudents(reorderedStudents);
-    setSortField('default');
+    } ) );
+    onReorderStudents( reorderedStudents );
+    setSortField( 'default' );
   };
 
   // Focus helper that reliably moves cursor to the target cell (with select and scrollIntoView)
-  const focusCell = (targetRowIndex: number, targetColIndex: number) => {
-    if (targetRowIndex < 0 || targetRowIndex >= displayedResults.length) return;
-    if (targetColIndex < 0 || targetColIndex >= subjects.length) return;
+  const focusCell = ( targetRowIndex: number, targetColIndex: number ) => {
+    if ( targetRowIndex < 0 || targetRowIndex >= displayedResults.length ) return;
+    if ( targetColIndex < 0 || targetColIndex >= subjects.length ) return;
 
     // setTimeout guarantees React's onChange re-render commit completes first
-    setTimeout(() => {
-      const key = getCellKey(targetRowIndex, targetColIndex);
-      let target = cellRefs.current.get(key);
-      if (!target) {
-        target = cellRefs.current.get(`pro-${key}`);
+    setTimeout( () => {
+      const key = getCellKey( targetRowIndex, targetColIndex );
+      let target = cellRefs.current.get( key );
+      if ( !target ) {
+        target = cellRefs.current.get( `pro-${key}` );
       }
-      if (!target) {
+      if ( !target ) {
         target = document.querySelector<HTMLInputElement>(
           `input[data-row="${targetRowIndex}"][data-col="${targetColIndex}"]`
         ) || undefined;
       }
 
-      if (target) {
+      if ( target ) {
         target.focus();
         target.select();
         try {
-          target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        } catch (e) {}
+          target.scrollIntoView( {block: 'nearest', inline: 'nearest'} );
+        } catch ( e ) {}
       }
-    }, 20);
+    }, 20 );
   };
 
   const handleCellKeyDown = (
@@ -184,29 +187,29 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
     subjectId: string,
     maxMarks: number
   ) => {
-    if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+    if ( e.key === 'Enter' || e.key === 'NumpadEnter' ) {
       e.preventDefault();
       e.stopPropagation();
-      if (e.shiftKey) {
+      if ( e.shiftKey ) {
         // Shift + Enter: Move to previous row of same column
-        focusCell(studentIndex - 1, subjectIndex);
+        focusCell( studentIndex - 1, subjectIndex );
       } else {
         // Enter: MOVE TO NEXT ROW OF SAME COLUMN
-        focusCell(studentIndex + 1, subjectIndex);
+        focusCell( studentIndex + 1, subjectIndex );
       }
-    } else if (e.key === 'ArrowDown') {
+    } else if ( e.key === 'ArrowDown' ) {
       e.preventDefault();
-      focusCell(studentIndex + 1, subjectIndex);
-    } else if (e.key === 'ArrowUp') {
+      focusCell( studentIndex + 1, subjectIndex );
+    } else if ( e.key === 'ArrowUp' ) {
       e.preventDefault();
-      focusCell(studentIndex - 1, subjectIndex);
+      focusCell( studentIndex - 1, subjectIndex );
     } else if (
       e.key === 'ArrowRight' &&
-      (e.currentTarget.selectionStart === e.currentTarget.value.length || e.currentTarget.value === '')
+      ( e.currentTarget.selectionStart === e.currentTarget.value.length || e.currentTarget.value === '' )
     ) {
-      focusCell(studentIndex, subjectIndex + 1);
-    } else if (e.key === 'ArrowLeft' && e.currentTarget.selectionStart === 0) {
-      focusCell(studentIndex, subjectIndex - 1);
+      focusCell( studentIndex, subjectIndex + 1 );
+    } else if ( e.key === 'ArrowLeft' && e.currentTarget.selectionStart === 0 ) {
+      focusCell( studentIndex, subjectIndex - 1 );
     }
   };
 
@@ -216,98 +219,196 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
     value: string,
     maxMarks: number
   ) => {
-    if (value.trim() === '') {
-      onUpdateMark(studentId, subjectId, null);
-      setErrorCell(null);
+    if ( value.trim() === '' ) {
+      onUpdateMark( studentId, subjectId, null );
+      setErrorCell( null );
       return;
     }
 
     const trimmed = value.trim().toLowerCase();
-    if (trimmed === 'ab' || trimmed === 'a' || trimmed === 'absent') {
-      onUpdateMark(studentId, subjectId, 0);
-      setErrorCell({ studentId, subjectId, message: 'Student marked Absent (recorded as 0 marks)' });
+    if ( trimmed === 'ab' || trimmed === 'a' || trimmed === 'absent' ) {
+      onUpdateMark( studentId, subjectId, 0 );
+      setErrorCell( {studentId, subjectId, message: 'Student marked Absent (recorded as 0 marks)'} );
       return;
     }
 
-    const num = Number(value);
-    if (isNaN(num)) {
-      setErrorCell({ studentId, subjectId, message: `Invalid input "${value}". Marks must be numbers or "Ab".` });
+    const num = Number( value );
+    if ( isNaN( num ) ) {
+      setErrorCell( {studentId, subjectId, message: `Invalid input "${value}". Marks must be numbers or "Ab".`} );
       return;
     }
 
-    if (num < 0) {
-      setErrorCell({ studentId, subjectId, message: `Marks cannot be negative (${num}).` });
+    if ( num < 0 ) {
+      setErrorCell( {studentId, subjectId, message: `Marks cannot be negative (${num}).`} );
       return;
     }
 
-    if (num > maxMarks) {
-      setErrorCell({
+    if ( num > maxMarks ) {
+      setErrorCell( {
         studentId,
         subjectId,
         message: `Entered score (${num}) exceeds maximum allowed (${maxMarks}) for this subject!`,
-      });
+      } );
     } else {
-      setErrorCell(null);
+      setErrorCell( null );
     }
 
-    onUpdateMark(studentId, subjectId, num);
+    onUpdateMark( studentId, subjectId, num );
   };
 
-  const handleSaveStudentEdit = (studentId: string) => {
-    if (editName.trim()) {
-      onUpdateStudent(studentId, editName.trim(), editRoll.trim());
+  // Direct 2D Excel table paste: automatically adjusts to next row and column
+  const handleCellPaste = (
+    e: React.ClipboardEvent<HTMLInputElement>,
+    startRowIndex: number,
+    startColIndex: number
+  ) => {
+    const clipboardText = e.clipboardData.getData( 'text/plain' ) || e.clipboardData.getData( 'text' );
+    if ( !clipboardText ) return;
+
+    // Check if pasted content is multi-cell from Excel/Sheets (contains tabs or newlines)
+    const hasTabs = clipboardText.includes( '\t' );
+    const hasNewlines = clipboardText.includes( '\n' ) || clipboardText.includes( '\r' );
+
+    if ( !hasTabs && !hasNewlines ) {
+      // Single value pasted: let default browser paste & onChange handle it
+      return;
     }
-    setEditingStudentId(null);
-  };
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+    // Intercept multi-cell Excel data
     e.preventDefault();
-    if (!newStudentName.trim()) return;
 
-    if (insertAfterIndex !== null && onInsertRowAt) {
+    // Normalize newlines and break into rows
+    const normalized = clipboardText.replace( /\r\n/g, '\n' ).replace( /\r/g, '\n' );
+    let rawRows = normalized.split( '\n' );
+    // Drop trailing empty line which Excel always includes
+    if ( rawRows.length > 0 && rawRows[rawRows.length - 1].trim() === '' ) {
+      rawRows.pop();
+    }
+
+    if ( rawRows.length === 0 ) return;
+
+    const updates: {studentId: string; subjectId: string; mark: number | null;}[] = [];
+    let maxCols = 1;
+    let lastRow = startRowIndex;
+    let lastCol = startColIndex;
+
+    rawRows.forEach( ( rowStr, rOffset ) => {
+      const targetRow = startRowIndex + rOffset;
+      if ( targetRow >= displayedResults.length ) return; // Out of vertical table bounds
+
+      const targetStudent = displayedResults[targetRow].student;
+      // Split row by tabs (standard Excel copy format). If no tabs, split by commas if present
+      const rawCols = hasTabs
+        ? rowStr.split( '\t' )
+        : rowStr.includes( ',' )
+          ? rowStr.split( ',' )
+          : [rowStr];
+
+      if ( rawCols.length > maxCols ) maxCols = rawCols.length;
+
+      rawCols.forEach( ( cellValStr, cOffset ) => {
+        const targetCol = startColIndex + cOffset;
+        if ( targetCol >= subjects.length ) return; // Out of horizontal table bounds
+
+        const targetSubject = subjects[targetCol];
+        const trimmed = cellValStr.replace( /^["']|["']$/g, '' ).trim();
+
+        let parsedMark: number | null = null;
+        if ( trimmed === '' || trimmed === '-' || trimmed === 'NA' || trimmed === 'N/A' ) {
+          parsedMark = null;
+        } else {
+          const lower = trimmed.toLowerCase();
+          if ( lower === 'ab' || lower === 'a' || lower === 'absent' ) {
+            parsedMark = 0;
+          } else {
+            const num = Number( trimmed.replace( /,/g, '' ) );
+            if ( !isNaN( num ) ) {
+              parsedMark = num;
+            }
+          }
+        }
+
+        updates.push( {
+          studentId: targetStudent.id,
+          subjectId: targetSubject.id,
+          mark: parsedMark,
+        } );
+
+        lastRow = targetRow;
+        lastCol = targetCol;
+      } );
+    } );
+
+    if ( updates.length > 0 ) {
+      if ( onBatchUpdateMarks ) {
+        onBatchUpdateMarks( updates );
+      } else {
+        updates.forEach( ( u ) => onUpdateMark( u.studentId, u.subjectId, u.mark ) );
+      }
+
+      setPasteToast( `Directly inserted ${updates.length} marks from Excel table across ${rawRows.length} rows & ${maxCols} columns!` );
+      setTimeout( () => setPasteToast( null ), 4000 );
+
+      // Focus the last affected cell
+      focusCell( lastRow, lastCol );
+    }
+  };
+
+  const handleSaveStudentEdit = ( studentId: string ) => {
+    if ( editName.trim() ) {
+      onUpdateStudent( studentId, editName.trim(), editRoll.trim() );
+    }
+    setEditingStudentId( null );
+  };
+
+  const handleAddSubmit = ( e: React.FormEvent ) => {
+    e.preventDefault();
+    if ( !newStudentName.trim() ) return;
+
+    if ( insertAfterIndex !== null && onInsertRowAt ) {
       onInsertRowAt(
         insertAfterIndex + 1,
         newStudentName.trim(),
-        newStudentRoll.trim() || String(students.length + 101)
+        newStudentRoll.trim() || String( students.length + 101 )
       );
     } else {
       onAddStudent(
         newStudentName.trim(),
-        newStudentRoll.trim() || String(students.length + 101)
+        newStudentRoll.trim() || String( students.length + 101 )
       );
     }
 
-    setNewStudentName('');
-    setNewStudentRoll('');
-    setShowAddRow(false);
-    setInsertAfterIndex(null);
+    setNewStudentName( '' );
+    setNewStudentRoll( '' );
+    setShowAddRow( false );
+    setInsertAfterIndex( null );
   };
 
   const handleSelectAll = () => {
-    if (selectedStudentIds.size === displayedResults.length) {
-      setSelectedStudentIds(new Set());
+    if ( selectedStudentIds.size === displayedResults.length ) {
+      setSelectedStudentIds( new Set() );
     } else {
-      setSelectedStudentIds(new Set(displayedResults.map((r) => r.student.id)));
+      setSelectedStudentIds( new Set( displayedResults.map( ( r ) => r.student.id ) ) );
     }
   };
 
-  const handleToggleSelectRow = (id: string) => {
-    const next = new Set(selectedStudentIds);
-    if (next.has(id)) {
-      next.delete(id);
+  const handleToggleSelectRow = ( id: string ) => {
+    const next = new Set( selectedStudentIds );
+    if ( next.has( id ) ) {
+      next.delete( id );
     } else {
-      next.add(id);
+      next.add( id );
     }
-    setSelectedStudentIds(next);
+    setSelectedStudentIds( next );
   };
 
   const handleDeleteSelected = () => {
-    if (selectedStudentIds.size === 0) return;
-    if (confirm(`Remove ${selectedStudentIds.size} selected student(s)?`)) {
-      const remainingStudents = students.filter((s) => !selectedStudentIds.has(s.id));
-      const renumbered = remainingStudents.map((s, idx) => ({ ...s, sNo: idx + 1 }));
-      onReorderStudents(renumbered);
-      setSelectedStudentIds(new Set());
+    if ( selectedStudentIds.size === 0 ) return;
+    if ( confirm( `Remove ${selectedStudentIds.size} selected student(s)?` ) ) {
+      const remainingStudents = students.filter( ( s ) => !selectedStudentIds.has( s.id ) );
+      const renumbered = remainingStudents.map( ( s, idx ) => ( {...s, sNo: idx + 1} ) );
+      onReorderStudents( renumbered );
+      setSelectedStudentIds( new Set() );
     }
   };
 
@@ -317,7 +418,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
       schoolConfig,
       subjects,
       results,
-      `${schoolConfig.className}_${schoolConfig.section}_${examTitle.replace(/\s+/g, '_')}.xlsx`
+      `${schoolConfig.className}_${schoolConfig.section}_${examTitle.replace( /\s+/g, '_' )}.xlsx`
     );
   };
 
@@ -327,7 +428,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
       schoolConfig,
       subjects,
       results,
-      `${schoolConfig.className}_${schoolConfig.section}_${examTitle.replace(/\s+/g, '_')}.csv`
+      `${schoolConfig.className}_${schoolConfig.section}_${examTitle.replace( /\s+/g, '_' )}.csv`
     );
   };
 
@@ -340,23 +441,21 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
             {/* View toggle */}
             <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-semibold">
               <button
-                onClick={() => setViewMode('classic')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  viewMode === 'classic'
+                onClick={() => setViewMode( 'classic' )}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${viewMode === 'classic'
                     ? 'bg-amber-400 text-slate-950 font-bold shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
                 title="Exact Yellow Marksheet layout matching original document"
               >
                 <Table className="w-3.5 h-3.5" /> Classic Yellow Sheet
               </button>
               <button
-                onClick={() => setViewMode('modern')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                  viewMode === 'modern'
+                onClick={() => setViewMode( 'modern' )}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${viewMode === 'modern'
                     ? 'bg-white text-slate-900 font-bold shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 <LayoutGrid className="w-3.5 h-3.5" /> Modern View
               </button>
@@ -374,8 +473,8 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
             {/* Add Student Button */}
             <button
               onClick={() => {
-                setInsertAfterIndex(null);
-                setShowAddRow(!showAddRow);
+                setInsertAfterIndex( null );
+                setShowAddRow( !showAddRow );
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors"
             >
@@ -403,7 +502,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
 
             {/* Print Register Button */}
             <button
-              onClick={onOpenRegisterPrint || (() => window.print())}
+              onClick={onOpenRegisterPrint || ( () => window.print() )}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-xs"
               title="Print official tabulation register with signature blocks"
             >
@@ -440,12 +539,12 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
               type="text"
               placeholder="Filter / Search student by name or roll number..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={( e ) => setSearchQuery( e.target.value )}
               className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
             />
             {searchQuery && (
               <button
-                onClick={() => setSearchQuery('')}
+                onClick={() => setSearchQuery( '' )}
                 className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 font-bold"
               >
                 ×
@@ -467,7 +566,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
 
             <select
               value={sortField}
-              onChange={(e) => setSortField(e.target.value as any)}
+              onChange={( e ) => setSortField( e.target.value as any )}
               className="p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
             >
               <option value="default">Original S.No Order</option>
@@ -480,7 +579,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
             {sortField !== 'default' && (
               <>
                 <button
-                  onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
+                  onClick={() => setSortDirection( sortDirection === 'asc' ? 'desc' : 'asc' )}
                   className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700"
                   title="Toggle Ascending / Descending"
                 >
@@ -494,7 +593,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                   Save New Row Order
                 </button>
                 <button
-                  onClick={() => setSortField('default')}
+                  onClick={() => setSortField( 'default' )}
                   className="text-slate-500 hover:text-slate-800 text-xs px-1"
                 >
                   Reset
@@ -519,7 +618,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                 <Trash2 className="w-3.5 h-3.5" /> Delete Selected
               </button>
               <button
-                onClick={() => setSelectedStudentIds(new Set())}
+                onClick={() => setSelectedStudentIds( new Set() )}
                 className="px-2.5 py-1 text-slate-600 hover:text-slate-900"
               >
                 Deselect All
@@ -544,7 +643,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
             type="text"
             placeholder="Student Full Name *"
             value={newStudentName}
-            onChange={(e) => setNewStudentName(e.target.value)}
+            onChange={( e ) => setNewStudentName( e.target.value )}
             className="text-xs p-2 bg-white border border-slate-300 rounded-lg flex-1 min-w-[200px] focus:outline-none focus:ring-2 focus:ring-amber-500 font-semibold"
             required
             autoFocus
@@ -553,7 +652,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
             type="text"
             placeholder="Roll Number (e.g. 113)"
             value={newStudentRoll}
-            onChange={(e) => setNewStudentRoll(e.target.value)}
+            onChange={( e ) => setNewStudentRoll( e.target.value )}
             className="text-xs p-2 bg-white border border-slate-300 rounded-lg w-36 focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
           />
           <button
@@ -565,8 +664,8 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
           <button
             type="button"
             onClick={() => {
-              setShowAddRow(false);
-              setInsertAfterIndex(null);
+              setShowAddRow( false );
+              setInsertAfterIndex( null );
             }}
             className="px-3 py-2 text-slate-600 hover:text-slate-900 text-xs font-semibold"
           >
@@ -595,7 +694,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                   <th
                     colSpan={4 + subjects.length + 4}
                     className="bg-[#FFFF00] text-black text-center py-2.5 px-4 font-black text-xl tracking-wider uppercase border-b border-black shadow-xs font-serif"
-                    style={{ backgroundColor: '#FFFF00', color: '#000000', letterSpacing: '0.08em' }}
+                    style={{backgroundColor: '#FFFF00', color: '#000000', letterSpacing: '0.08em'}}
                   >
                     {examTitle}
                   </th>
@@ -604,7 +703,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                 {/* SUBHEADER: Blue corner, Orange Student info, Yellow Max Marks */}
                 <tr className="border-b border-black">
                   {/* Select Checkbox & Shift buttons column (Desktop) */}
-                  <th className="hidden sm:table-cell sm:sticky sm:left-0 z-30 bg-[#3B82F6] border-r border-black w-14 text-center" style={{ backgroundColor: '#3B82F6' }}>
+                  <th className="hidden sm:table-cell sm:sticky sm:left-0 z-30 bg-[#3B82F6] border-r border-black w-14 text-center" style={{backgroundColor: '#3B82F6'}}>
                     <button
                       onClick={handleSelectAll}
                       className="text-white hover:text-amber-200 transition-colors"
@@ -618,40 +717,40 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                     </button>
                   </th>
                   {/* S.No - Sticky on mobile & desktop */}
-                  <th 
-                    className="sticky left-0 sm:left-14 z-30 bg-[#3B82F6] border-r border-black w-10 sm:w-12 text-center text-[10px] text-white font-bold" 
-                    style={{ backgroundColor: '#3B82F6' }}
+                  <th
+                    className="sticky left-0 sm:left-14 z-30 bg-[#3B82F6] border-r border-black w-10 sm:w-12 text-center text-[10px] text-white font-bold"
+                    style={{backgroundColor: '#3B82F6'}}
                   >
                     #
                   </th>
                   {/* Orange block over Roll Number (Sticky on mobile & desktop) */}
                   <th
                     className="sticky left-10 sm:left-26 z-30 bg-[#F59E0B] border-r-2 border-black text-center font-black text-[10px] text-black uppercase w-20 sm:w-24 shadow-[4px_0_10px_-2px_rgba(0,0,0,0.25)]"
-                    style={{ backgroundColor: '#F59E0B' }}
+                    style={{backgroundColor: '#F59E0B'}}
                   >
                     ROLL NO
                   </th>
                   {/* Orange block over Student Name */}
                   <th
                     className="bg-[#F59E0B] border-r border-black text-center font-bold text-[11px] text-black uppercase min-w-[170px]"
-                    style={{ backgroundColor: '#F59E0B' }}
+                    style={{backgroundColor: '#F59E0B'}}
                   >
                     STUDENT NAME
                   </th>
                   {/* Max Marks for each subject in yellow cells */}
-                  {subjects.map((sub) => (
+                  {subjects.map( ( sub ) => (
                     <th
                       key={sub.id}
                       className="bg-[#FFFF00] border-r border-black text-center py-1.5 px-2 font-extrabold text-sm text-black"
-                      style={{ backgroundColor: '#FFFF00' }}
+                      style={{backgroundColor: '#FFFF00'}}
                     >
                       {sub.maxMarks}
                     </th>
-                  ))}
+                  ) )}
                   {/* Max marks for Total */}
                   <th
                     className="bg-[#FFFF00] border-r border-black text-center py-1.5 px-2 font-extrabold text-sm text-black"
-                    style={{ backgroundColor: '#FFFF00' }}
+                    style={{backgroundColor: '#FFFF00'}}
                   >
                     {totalMaxMarks}
                   </th>
@@ -678,11 +777,11 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                   <th className="border-r border-black py-2 px-3 min-w-[170px] bg-white font-extrabold text-black">
                     Student Name
                   </th>
-                  {subjects.map((sub) => (
+                  {subjects.map( ( sub ) => (
                     <th key={sub.id} className="border-r border-black py-2 px-2 text-center min-w-[70px]">
                       {sub.name}
                     </th>
-                  ))}
+                  ) )}
                   <th className="border-r border-black py-2 px-2 text-center min-w-[70px] bg-slate-50">
                     Total
                   </th>
@@ -700,23 +799,22 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
 
               {/* DATA ROWS */}
               <tbody className="divide-y divide-black/30">
-                {displayedResults.map((res, displayIdx) => {
+                {displayedResults.map( ( res, displayIdx ) => {
                   const isEditingThisStudent = editingStudentId === res.student.id;
-                  const isSelected = selectedStudentIds.has(res.student.id);
+                  const isSelected = selectedStudentIds.has( res.student.id );
 
                   // Find original student index for shifting
-                  const originalIndex = students.findIndex((s) => s.id === res.student.id);
+                  const originalIndex = students.findIndex( ( s ) => s.id === res.student.id );
 
                   return (
                     <tr
                       key={res.student.id}
-                      className={`transition-colors group ${
-                        isSelected
+                      className={`transition-colors group ${isSelected
                           ? 'bg-amber-100/70'
                           : displayIdx % 2 === 1
-                          ? 'bg-slate-50/50 hover:bg-amber-50/50'
-                          : 'hover:bg-amber-50/50'
-                      }`}
+                            ? 'bg-slate-50/50 hover:bg-amber-50/50'
+                            : 'hover:bg-amber-50/50'
+                        }`}
                     >
                       {/* Row Shift & Selection Controls (Desktop) */}
                       <td className="hidden sm:table-cell sm:sticky sm:left-0 z-20 bg-white group-hover:bg-amber-50 border-r border-black/30 py-1 px-1 text-center">
@@ -724,19 +822,18 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            onChange={() => handleToggleSelectRow(res.student.id)}
+                            onChange={() => handleToggleSelectRow( res.student.id )}
                             className="rounded text-amber-500 focus:ring-amber-500 mr-0.5 cursor-pointer"
                           />
                           {/* Shift Up Button */}
                           <button
                             type="button"
-                            onClick={() => onMoveRowUp(originalIndex)}
+                            onClick={() => onMoveRowUp( originalIndex )}
                             disabled={originalIndex === 0}
-                            className={`p-0.5 rounded transition-colors ${
-                              originalIndex === 0
+                            className={`p-0.5 rounded transition-colors ${originalIndex === 0
                                 ? 'text-slate-200 cursor-not-allowed'
                                 : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
-                            }`}
+                              }`}
                             title="Shift row up"
                           >
                             <ArrowUp className="w-3.5 h-3.5" />
@@ -744,13 +841,12 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           {/* Shift Down Button */}
                           <button
                             type="button"
-                            onClick={() => onMoveRowDown(originalIndex)}
+                            onClick={() => onMoveRowDown( originalIndex )}
                             disabled={originalIndex === students.length - 1}
-                            className={`p-0.5 rounded transition-colors ${
-                              originalIndex === students.length - 1
+                            className={`p-0.5 rounded transition-colors ${originalIndex === students.length - 1
                                 ? 'text-slate-200 cursor-not-allowed'
                                 : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
-                            }`}
+                              }`}
                             title="Shift row down"
                           >
                             <ArrowDown className="w-3.5 h-3.5" />
@@ -769,7 +865,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           <input
                             type="text"
                             value={editRoll}
-                            onChange={(e) => setEditRoll(e.target.value)}
+                            onChange={( e ) => setEditRoll( e.target.value )}
                             className="w-full text-center text-xs p-1 border border-amber-500 rounded bg-white font-mono font-bold"
                           />
                         ) : (
@@ -795,13 +891,13 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                             <input
                               type="text"
                               value={editName}
-                              onChange={(e) => setEditName(e.target.value)}
+                              onChange={( e ) => setEditName( e.target.value )}
                               className="w-full text-xs p-1 border border-amber-500 rounded bg-white font-bold"
                               autoFocus
                             />
                             <button
                               type="button"
-                              onClick={() => handleSaveStudentEdit(res.student.id)}
+                              onClick={() => handleSaveStudentEdit( res.student.id )}
                               className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
                               title="Save name & roll number"
                             >
@@ -809,7 +905,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => setEditingStudentId(null)}
+                              onClick={() => setEditingStudentId( null )}
                               className="p-1 text-slate-400 hover:bg-slate-100 rounded text-xs"
                             >
                               ✕
@@ -819,7 +915,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           <div className="flex items-center justify-between gap-1">
                             <div className="flex items-center gap-1 truncate">
                               <span
-                                onClick={() => onOpenReportCard(res.student.id)}
+                                onClick={() => onOpenReportCard( res.student.id )}
                                 className="cursor-pointer hover:text-amber-800 hover:underline font-bold truncate text-xs"
                                 title="Click to view full printable report card"
                               >
@@ -829,7 +925,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                               <div className="flex sm:hidden items-center shrink-0 ml-1">
                                 <button
                                   type="button"
-                                  onClick={(e) => { e.stopPropagation(); onMoveRowUp(originalIndex); }}
+                                  onClick={( e ) => {e.stopPropagation(); onMoveRowUp( originalIndex );}}
                                   disabled={originalIndex === 0}
                                   className="p-0.5 text-slate-400 hover:text-black disabled:opacity-20"
                                   title="Shift Up"
@@ -838,7 +934,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={(e) => { e.stopPropagation(); onMoveRowDown(originalIndex); }}
+                                  onClick={( e ) => {e.stopPropagation(); onMoveRowDown( originalIndex );}}
                                   disabled={originalIndex === students.length - 1}
                                   className="p-0.5 text-slate-400 hover:text-black disabled:opacity-20"
                                   title="Shift Down"
@@ -852,8 +948,8 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setInsertAfterIndex(originalIndex);
-                                  setShowAddRow(true);
+                                  setInsertAfterIndex( originalIndex );
+                                  setShowAddRow( true );
                                 }}
                                 className="p-0.5 text-slate-400 hover:text-emerald-700 rounded hover:bg-emerald-50"
                                 title="Insert row below this student"
@@ -863,9 +959,9 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setEditingStudentId(res.student.id);
-                                  setEditName(res.student.name);
-                                  setEditRoll(res.student.rollNo);
+                                  setEditingStudentId( res.student.id );
+                                  setEditName( res.student.name );
+                                  setEditRoll( res.student.rollNo );
                                 }}
                                 className="p-0.5 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-100"
                                 title="Edit Student"
@@ -875,8 +971,8 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (confirm(`Delete student ${res.student.name} (Roll ${res.student.rollNo})?`)) {
-                                    onDeleteStudent(res.student.id);
+                                  if ( confirm( `Delete student ${res.student.name} (Roll ${res.student.rollNo})?` ) ) {
+                                    onDeleteStudent( res.student.id );
                                   }
                                 }}
                                 className="p-0.5 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50"
@@ -890,54 +986,54 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                       </td>
 
                       {/* Subject Mark Cells (Interactive Inputs) */}
-                      {subjects.map((sub, subjectIdx) => {
+                      {subjects.map( ( sub, subjectIdx ) => {
                         const markVal = res.marks[sub.id];
-                        const cellKey = getCellKey(displayIdx, subjectIdx);
-                        const isOverMax = markVal !== undefined && markVal !== null && Number(markVal) > sub.maxMarks;
-                        const isNegative = markVal !== undefined && markVal !== null && Number(markVal) < 0;
+                        const cellKey = getCellKey( displayIdx, subjectIdx );
+                        const isOverMax = markVal !== undefined && markVal !== null && Number( markVal ) > sub.maxMarks;
+                        const isNegative = markVal !== undefined && markVal !== null && Number( markVal ) < 0;
                         const isInvalid = isOverMax || isNegative;
 
                         return (
                           <td
                             key={sub.id}
-                            className={`border-r border-black/30 py-0.5 px-1 text-center relative ${
-                              isInvalid ? 'bg-rose-100 ring-2 ring-rose-500/70' : ''
-                            }`}
+                            className={`border-r border-black/30 py-0.5 px-1 text-center relative ${isInvalid ? 'bg-rose-100 ring-2 ring-rose-500/70' : ''
+                              }`}
                             title={
                               isOverMax
                                 ? `Validation Alert: Score (${markVal}) exceeds maximum (${sub.maxMarks})`
                                 : isNegative
-                                ? `Validation Alert: Score (${markVal}) cannot be negative`
-                                : undefined
+                                  ? `Validation Alert: Score (${markVal}) cannot be negative`
+                                  : undefined
                             }
                           >
                             <input
-                              ref={(el) => {
-                                if (el) cellRefs.current.set(cellKey, el);
-                                else cellRefs.current.delete(cellKey);
+                              ref={( el ) => {
+                                if ( el ) cellRefs.current.set( cellKey, el );
+                                else cellRefs.current.delete( cellKey );
                               }}
                               data-row={displayIdx}
                               data-col={subjectIdx}
                               type="text"
                               inputMode="decimal"
                               value={markVal !== undefined && markVal !== null ? markVal : ''}
-                              onChange={(e) =>
-                                handleCellChange(res.student.id, sub.id, e.target.value, sub.maxMarks)
+                              onChange={( e ) =>
+                                handleCellChange( res.student.id, sub.id, e.target.value, sub.maxMarks )
                               }
-                              onKeyDown={(e) =>
-                                handleCellKeyDown(e, displayIdx, subjectIdx, res.student.id, sub.id, sub.maxMarks)
+                              onKeyDown={( e ) =>
+                                handleCellKeyDown( e, displayIdx, subjectIdx, res.student.id, sub.id, sub.maxMarks )
                               }
+                              onPaste={( e ) => handleCellPaste( e, displayIdx, subjectIdx )}
+                              onPaste={( e ) => handleCellPaste( e, displayIdx, subjectIdx )}
                               placeholder=""
-                              className={`w-full py-1.5 text-center text-xs font-bold text-black bg-transparent focus:bg-amber-100 focus:outline-hidden focus:ring-2 focus:ring-amber-500 rounded transition-colors ${
-                                isInvalid ? 'text-rose-700 font-black' : ''
-                              }`}
+                              className={`w-full py-1.5 text-center text-xs font-bold text-black bg-transparent focus:bg-amber-100 focus:outline-hidden focus:ring-2 focus:ring-amber-500 rounded transition-colors ${isInvalid ? 'text-rose-700 font-black' : ''
+                                }`}
                             />
                             {isInvalid && (
                               <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
                             )}
                           </td>
                         );
-                      })}
+                      } )}
 
                       {/* Calculated Total */}
                       <td className="border-r border-black/30 py-1.5 px-2 text-center font-bold text-black bg-slate-50">
@@ -946,7 +1042,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
 
                       {/* Calculated Percentage */}
                       <td className="border-r border-black/30 py-1.5 px-2 text-center font-bold text-black bg-slate-50">
-                        {res.percentage.toFixed(2)}%
+                        {res.percentage.toFixed( 2 )}%
                       </td>
 
                       {/* Calculated Rank */}
@@ -957,22 +1053,21 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                       {/* Calculated Remark */}
                       <td className="py-1.5 px-3 text-center font-semibold text-black bg-slate-50">
                         <span
-                          className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
-                            res.percentage >= 80
+                          className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${res.percentage >= 80
                               ? 'text-emerald-800 bg-emerald-100'
                               : res.percentage >= 60
-                              ? 'text-blue-800 bg-blue-100'
-                              : res.percentage >= 33
-                              ? 'text-amber-800 bg-amber-100'
-                              : 'text-red-800 bg-red-100'
-                          }`}
+                                ? 'text-blue-800 bg-blue-100'
+                                : res.percentage >= 33
+                                  ? 'text-amber-800 bg-amber-100'
+                                  : 'text-red-800 bg-red-100'
+                            }`}
                         >
                           {res.remark}
                         </span>
                       </td>
                     </tr>
                   );
-                })}
+                } )}
               </tbody>
             </table>
           ) : (
@@ -986,14 +1081,14 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                     Roll No
                   </th>
                   <th className="py-3 px-4 min-w-[170px] bg-slate-900">Student Name</th>
-                  {subjects.map((sub) => (
+                  {subjects.map( ( sub ) => (
                     <th key={sub.id} className="py-3 px-3 text-center bg-slate-900">
                       {sub.name}
                       <span className="block text-[9px] font-normal text-amber-300">
                         (Max {sub.maxMarks})
                       </span>
                     </th>
-                  ))}
+                  ) )}
                   <th className="py-3 px-3 text-center bg-slate-800">Total ({totalMaxMarks})</th>
                   <th className="py-3 px-3 text-center bg-slate-800">Percentage</th>
                   <th className="py-3 px-3 text-center bg-slate-800">Rank</th>
@@ -1002,33 +1097,31 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {displayedResults.map((res, displayIdx) => {
-                  const originalIndex = students.findIndex((s) => s.id === res.student.id);
+                {displayedResults.map( ( res, displayIdx ) => {
+                  const originalIndex = students.findIndex( ( s ) => s.id === res.student.id );
 
                   return (
                     <tr key={res.student.id} className="hover:bg-slate-50 transition-colors group">
                       <td className="hidden sm:table-cell sm:sticky sm:left-0 z-20 bg-white group-hover:bg-slate-50 py-2.5 px-2 text-center border-r border-slate-200">
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => onMoveRowUp(originalIndex)}
+                            onClick={() => onMoveRowUp( originalIndex )}
                             disabled={originalIndex === 0}
-                            className={`p-1 rounded ${
-                              originalIndex === 0
+                            className={`p-1 rounded ${originalIndex === 0
                                 ? 'text-slate-300'
                                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                            }`}
+                              }`}
                             title="Shift Up"
                           >
                             <ArrowUp className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => onMoveRowDown(originalIndex)}
+                            onClick={() => onMoveRowDown( originalIndex )}
                             disabled={originalIndex === students.length - 1}
-                            className={`p-1 rounded ${
-                              originalIndex === students.length - 1
+                            className={`p-1 rounded ${originalIndex === students.length - 1
                                 ? 'text-slate-300'
                                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                            }`}
+                              }`}
                             title="Shift Down"
                           >
                             <ArrowDown className="w-3.5 h-3.5" />
@@ -1056,14 +1149,14 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           <span className="truncate">{res.student.name}</span>
                           <div className="flex sm:hidden items-center shrink-0">
                             <button
-                              onClick={() => onMoveRowUp(originalIndex)}
+                              onClick={() => onMoveRowUp( originalIndex )}
                               disabled={originalIndex === 0}
                               className="p-1 text-slate-400 hover:text-black disabled:opacity-20"
                             >
                               <ArrowUp className="w-3 h-3" />
                             </button>
                             <button
-                              onClick={() => onMoveRowDown(originalIndex)}
+                              onClick={() => onMoveRowDown( originalIndex )}
                               disabled={originalIndex === students.length - 1}
                               className="p-1 text-slate-400 hover:text-black disabled:opacity-20"
                             >
@@ -1072,42 +1165,42 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                           </div>
                         </div>
                       </td>
-                      {subjects.map((sub, subjectIdx) => {
+                      {subjects.map( ( sub, subjectIdx ) => {
                         const markVal = res.marks[sub.id];
-                        const cellKey = getCellKey(displayIdx, subjectIdx);
-                        const isOverMax = markVal !== undefined && markVal !== null && Number(markVal) > sub.maxMarks;
-                        const isNegative = markVal !== undefined && markVal !== null && Number(markVal) < 0;
+                        const cellKey = getCellKey( displayIdx, subjectIdx );
+                        const isOverMax = markVal !== undefined && markVal !== null && Number( markVal ) > sub.maxMarks;
+                        const isNegative = markVal !== undefined && markVal !== null && Number( markVal ) < 0;
                         const isInvalid = isOverMax || isNegative;
 
                         return (
                           <td key={sub.id} className="py-1 px-1 text-center relative">
                             <input
-                              ref={(el) => {
-                                if (el) cellRefs.current.set(`pro-${cellKey}`, el);
-                                else cellRefs.current.delete(`pro-${cellKey}`);
+                              ref={( el ) => {
+                                if ( el ) cellRefs.current.set( `pro-${cellKey}`, el );
+                                else cellRefs.current.delete( `pro-${cellKey}` );
                               }}
                               data-row={displayIdx}
                               data-col={subjectIdx}
                               type="text"
                               inputMode="decimal"
                               value={markVal !== undefined && markVal !== null ? markVal : ''}
-                              onChange={(e) =>
-                                handleCellChange(res.student.id, sub.id, e.target.value, sub.maxMarks)
+                              onChange={( e ) =>
+                                handleCellChange( res.student.id, sub.id, e.target.value, sub.maxMarks )
                               }
-                              onKeyDown={(e) =>
-                                handleCellKeyDown(e, displayIdx, subjectIdx, res.student.id, sub.id, sub.maxMarks)
+                              onKeyDown={( e ) =>
+                                handleCellKeyDown( e, displayIdx, subjectIdx, res.student.id, sub.id, sub.maxMarks )
                               }
-                              className={`w-16 py-1 text-center font-bold text-xs rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden transition-colors ${
-                                isInvalid
+                              onPaste={( e ) => handleCellPaste( e, displayIdx, subjectIdx )}
+                              className={`w-16 py-1 text-center font-bold text-xs rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden transition-colors ${isInvalid
                                   ? 'bg-rose-100 text-rose-800 border-2 border-rose-500 ring-1 ring-rose-400 font-black'
                                   : 'bg-slate-100 border border-slate-200 text-slate-800'
-                              }`}
+                                }`}
                               title={
                                 isOverMax
                                   ? `Marks (${markVal}) exceed max allowed (${sub.maxMarks})`
                                   : isNegative
-                                  ? 'Marks cannot be negative'
-                                  : undefined
+                                    ? 'Marks cannot be negative'
+                                    : undefined
                               }
                             />
                             {isInvalid && (
@@ -1115,7 +1208,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                             )}
                           </td>
                         );
-                      })}
+                      } )}
                       <td className="py-2.5 px-3 text-center font-black text-slate-900 bg-slate-50">
                         {res.totalObtained}
                       </td>
@@ -1134,7 +1227,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                       </td>
                       <td className="py-2.5 px-3 text-center bg-slate-50">
                         <button
-                          onClick={() => onOpenReportCard(res.student.id)}
+                          onClick={() => onOpenReportCard( res.student.id )}
                           className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs shadow-xs transition-colors"
                         >
                           View Card
@@ -1142,7 +1235,7 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
                       </td>
                     </tr>
                   );
-                })}
+                } )}
               </tbody>
             </table>
           )}
@@ -1152,16 +1245,31 @@ export const TabulationSheet: React.FC<TabulationSheetProps> = ({
       {/* Helpful keyboard hints & summary footer */}
       <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 px-2 py-1 gap-2">
         <div className="flex items-center gap-3 flex-wrap">
-          <span>💡 <strong>Keyboard Shortcuts:</strong> Press <kbd className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-mono font-bold">Enter</kbd> to jump down to next student</span>
+          <span>💡 <strong>Keyboard Shortcuts:</strong> Press <kbd className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-mono font-bold">Enter</kbd> to jump down</span>
           <span>•</span>
-          <span>Use <kbd className="px-1.5 py-0.5 bg-slate-200 text-slate-800 rounded font-mono font-bold">Arrow Keys</kbd> to move left/right/up/down</span>
+          <span><kbd className="px-1.5 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded font-mono font-bold">Ctrl+V</kbd> Direct paste from Excel across rows & columns</span>
           <span>•</span>
-          <span>Click <strong>⬆️ / ⬇️</strong> in the Shift column to move rows</span>
+          <span>Arrow keys to navigate cells</span>
+          <span>•</span>
+          <span>Click <strong>⬆️ / ⬇️</strong> in Shift column to reorder rows</span>
         </div>
         <div className="font-semibold text-slate-700">
           Showing {displayedResults.length} of {students.length} students • Total Max Marks: {totalMaxMarks}
         </div>
       </div>
+
+      {/* Floating Excel Paste Toast */}
+      {pasteToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-emerald-500 flex items-center gap-3 animate-in fade-in slide-in-from-bottom duration-200">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+            <FileSpreadsheet className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-xs font-black text-emerald-400">Excel Direct Paste Applied</p>
+            <p className="text-xs text-slate-200 font-medium">{pasteToast}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
