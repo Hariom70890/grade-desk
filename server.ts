@@ -27,7 +27,7 @@ async function getMongoClient(uri?: string): Promise<{ client: MongoClient; dbNa
   }
 
   // Parse DB name from URI or use default
-  let dbName = 'gradedesk';
+  let dbName = 'grade-desk';
   try {
     const urlObj = new URL(targetUri.replace('mongodb+srv://', 'https://').replace('mongodb://', 'http://'));
     const pathname = urlObj.pathname.replace(/^\//, '');
