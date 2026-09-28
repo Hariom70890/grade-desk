@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { ComputedStudentResult, SchoolConfig, Subject } from '../types';
-import { Printer, X, Award, Grid2X2, FileText, CheckCircle2 } from 'lucide-react';
+import React, {useState} from 'react';
+import {ComputedStudentResult, SchoolConfig, Subject} from '../types';
+import {Printer, X, Award, Grid2X2, FileText, CheckCircle2} from 'lucide-react';
 
 interface BatchReportCardsProps {
   isOpen: boolean;
@@ -11,22 +11,22 @@ interface BatchReportCardsProps {
   examTitle: string;
 }
 
-export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
+export const BatchReportCards: React.FC<BatchReportCardsProps> = ( {
   isOpen,
   onClose,
   results,
   schoolConfig,
   subjects,
   examTitle,
-}) => {
-  const [layoutMode, setLayoutMode] = useState<'quad' | 'full'>('quad'); // 'quad' = 4 cards per A4 page
+} ) => {
+  const [layoutMode, setLayoutMode] = useState<'quad' | 'full'>( 'quad' ); // 'quad' = 4 cards per A4 page
 
-  if (!isOpen) return null;
+  if ( !isOpen ) return null;
 
   // Chunk results into groups of 4 for the 4-per-page A4 layout
   const chunkedResults: ComputedStudentResult[][] = [];
-  for (let i = 0; i < results.length; i += 4) {
-    chunkedResults.push(results.slice(i, i + 4));
+  for ( let i = 0; i < results.length; i += 4 ) {
+    chunkedResults.push( results.slice( i, i + 4 ) );
   }
 
   const totalPages = layoutMode === 'quad' ? chunkedResults.length : results.length;
@@ -114,24 +114,22 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
         <div className="flex items-center gap-2">
           <div className="bg-slate-800 p-1 rounded-xl flex items-center border border-slate-700 text-xs">
             <button
-              onClick={() => setLayoutMode('quad')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${
-                layoutMode === 'quad'
+              onClick={() => setLayoutMode( 'quad' )}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${layoutMode === 'quad'
                   ? 'bg-amber-500 text-slate-950 shadow-sm'
                   : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
-              }`}
+                }`}
               title="Prints 4 cards on each A4 page (2x2 grid)"
             >
               <Grid2X2 className="w-3.5 h-3.5" />
               <span>4 Cards / A4 Page</span>
             </button>
             <button
-              onClick={() => setLayoutMode('full')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${
-                layoutMode === 'full'
+              onClick={() => setLayoutMode( 'full' )}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all ${layoutMode === 'full'
                   ? 'bg-amber-500 text-slate-950 shadow-sm'
                   : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
-              }`}
+                }`}
               title="Prints 1 large full-page card per student"
             >
               <FileText className="w-3.5 h-3.5" />
@@ -162,7 +160,7 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
           // ==========================================
           // 4 CARDS PER A4 PAGE (2x2 GRID FORMAT)
           // ==========================================
-          chunkedResults.map((pageGroup, pageIndex) => (
+          chunkedResults.map( ( pageGroup, pageIndex ) => (
             <div key={`page-${pageIndex}`} className="flex flex-col items-center w-full">
               {/* Screen indicator for page number */}
               <div className="no-print text-xs font-bold text-slate-400 mb-2 flex items-center gap-2">
@@ -173,11 +171,24 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
 
               {/* Physical A4 Sheet Container */}
               <div className="a4-sheet-quad bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-300 w-full max-w-[850px] min-h-[1100px] p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 grid-rows-2 gap-3.5 box-border">
-                {pageGroup.map((result) => {
-                  const attendanceDays = result.student.attendanceDays ?? 90;
-                  const totalDays = result.student.totalWorkingDays ?? 92;
-                  const attendancePercent = ((attendanceDays / totalDays) * 100).toFixed(0);
-
+                {pageGroup.map( ( result ) => {
+                  const gradeInfo =
+                    result.percentage >= 90
+                      ? {grade: 'A1', remark: 'Outstanding'}
+                      : result.percentage >= 80
+                        ? {grade: 'A2', remark: 'Excellent'}
+                        : result.percentage >= 70
+                          ? {grade: 'B1', remark: 'Very Good'}
+                          : result.percentage >= 60
+                            ? {grade: 'B2', remark: 'Good'}
+                            : result.percentage >= 50
+                              ? {grade: 'C1', remark: 'Above Average'}
+                              : result.percentage >= 40
+                                ? {grade: 'C2', remark: 'Average'}
+                                : result.percentage >= 33
+                                  ? {grade: 'D', remark: 'Needs Improvement'}
+                                  : {grade: 'E', remark: 'Poor'};
+                  // console.log( "result:-", result );
                   return (
                     <div
                       key={result.student.id}
@@ -188,14 +199,14 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
 
                       {/* Card Header: School info & Exam Title */}
                       <div className="text-center relative z-10 pb-1.5 border-b border-stone-300">
-                        <h3 className="font-extrabold text-[11px] sm:text-[12px] uppercase text-stone-900 tracking-tight leading-tight">
+                        <h3 className="font-extrabold text-[14px] sm:text-[12px] uppercase text-stone-900 tracking-tight leading-tight">
                           {schoolConfig.schoolName}
                         </h3>
                         <p className="text-[12px] text-stone-600 font-medium leading-none mt-0.5 truncate">
-                          {schoolConfig.schoolSubtitle}
+                          {/* {schoolConfig.schoolSubtitle} */}
                         </p>
                         <div className="mt-1 inline-block bg-amber-100 text-stone-900 px-2 py-0.5 rounded text-[12px] sm:text-[9px] font-black uppercase tracking-wider border border-amber-300">
-                          {examTitle} 
+                          {examTitle}
                         </div>
                       </div>
 
@@ -218,7 +229,7 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                           <span className="font-bold text-stone-800 text-[9px] leading-tight">
                             {schoolConfig.className} - {schoolConfig.section}
                           </span>
-                        </div> 
+                        </div>
                       </div>
 
                       {/* Compact Marks Table */}
@@ -234,11 +245,11 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-stone-200 text-[12px]">
-                            {subjects.map((sub, i) => {
+                            {subjects.map( ( sub, i ) => {
                               const mark = result.marks[sub.id];
                               const hasMark = mark !== undefined && mark !== null;
-                              const passMark = sub.passMarks ?? Math.ceil(sub.maxMarks * 0.33);
-                              const isPass = hasMark && Number(mark) >= passMark;
+                              const passMark = sub.passMarks ?? Math.ceil( sub.maxMarks * 0.33 );
+                              const isPass = hasMark && Number( mark ) >= passMark;
 
                               return (
                                 <tr key={sub.id} className={i % 2 === 0 ? 'bg-white' : 'bg-stone-50/60'}>
@@ -263,7 +274,7 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                                   </td>
                                 </tr>
                               );
-                            })}
+                            } )}
                             {/* Grand Total Row */}
                             <tr className="bg-amber-100/90 font-black text-stone-900 border-t-2 border-stone-400">
                               <td className="py-1 px-1.5 uppercase text-[8.5px]">Total</td>
@@ -278,10 +289,10 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                             </tr>
                           </tbody>
                         </table>
-                     
+
                       </div>
 
-                      
+
                       {/* Rank, Grade & Remark Summary */}
                       <div className="grid grid-cols-3 gap-1 bg-stone-50 border border-stone-200 rounded p-1 text-center my-1 relative z-10 text-[12px]">
                         <div>
@@ -293,13 +304,13 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                         <div>
                           <span className="text-stone-500 block leading-tight">Grade</span>
                           <span className="font-extrabold text-stone-800 leading-tight">
-                            {result.grade}
+                            {gradeInfo.grade}
                           </span>
                         </div>
                         <div className="truncate">
                           <span className="text-stone-500 block  leading-tight">Remark</span>
                           <span className="font-bold text-stone-700 text-[12px] leading-tight truncate block">
-                            {result.remark}
+                            {gradeInfo.remark}
                           </span>
                         </div>
                       </div>
@@ -317,28 +328,28 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                       </div>
                     </div>
                   );
-                })}
+                } )}
 
                 {/* If page has less than 4 cards, fill remaining slots with empty layout so A4 grid doesn't stretch */}
-                {Array.from({ length: 4 - pageGroup.length }).map((_, emptyIdx) => (
+                {Array.from( {length: 4 - pageGroup.length} ).map( ( _, emptyIdx ) => (
                   <div
                     key={`empty-${emptyIdx}`}
                     className="single-card-quad border-2 border-dashed border-stone-200 rounded-lg p-3 flex items-center justify-center text-stone-300 text-xs font-semibold print:opacity-0"
                   >
                     Blank Slot
                   </div>
-                ))}
+                ) )}
               </div>
             </div>
-          ))
+          ) )
         ) : (
           // ==========================================
           // 1 FULL PAGE PER STUDENT (STANDARD FORMAT)
           // ==========================================
-          results.map((result) => {
+          results.map( ( result ) => {
             const attendanceDays = result.student.attendanceDays ?? 90;
             const totalDays = result.student.totalWorkingDays ?? 92;
-            const attendancePercent = ((attendanceDays / totalDays) * 100).toFixed(1);
+            const attendancePercent = ( ( attendanceDays / totalDays ) * 100 ).toFixed( 1 );
 
             return (
               <div
@@ -400,12 +411,12 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {subjects.map((sub, i) => {
+                    {subjects.map( ( sub, i ) => {
                       const mark = result.marks[sub.id];
                       const hasMark = mark !== undefined && mark !== null;
-                      const passMark = sub.passMarks ?? Math.ceil(sub.maxMarks * 0.33);
-                      const isPass = hasMark && Number(mark) >= passMark;
-                      const subPct = hasMark ? ((Number(mark) / sub.maxMarks) * 100).toFixed(1) : '-';
+                      const passMark = sub.passMarks ?? Math.ceil( sub.maxMarks * 0.33 );
+                      const isPass = hasMark && Number( mark ) >= passMark;
+                      const subPct = hasMark ? ( ( Number( mark ) / sub.maxMarks ) * 100 ).toFixed( 1 ) : '-';
 
                       return (
                         <tr key={sub.id} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
@@ -432,11 +443,11 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                           </td>
                         </tr>
                       );
-                    })}
+                    } )}
                     <tr className="bg-amber-100 font-extrabold text-slate-900">
                       <td colSpan={2} className="py-2 px-4 uppercase text-xs">Grand Total</td>
                       <td className="py-2 px-3 text-center text-xs">{result.totalMax}</td>
-                      <td className="py-2 px-3 text-center text-xs">{Math.ceil(result.totalMax * 0.33)}</td>
+                      <td className="py-2 px-3 text-center text-xs">{Math.ceil( result.totalMax * 0.33 )}</td>
                       <td className="py-2 px-3 text-center text-sm font-black text-amber-950">{result.totalObtained}</td>
                       <td className="py-2 px-3 text-center text-sm font-black text-amber-950">{result.percentage}%</td>
                       <td className="py-2 px-3 text-center text-xs">
@@ -485,7 +496,7 @@ export const BatchReportCards: React.FC<BatchReportCardsProps> = ({
                 </div>
               </div>
             );
-          })
+          } )
         )}
       </div>
     </div>
